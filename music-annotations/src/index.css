@@ -1,0 +1,13 @@
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+
+body {
+  font-family: sans-serif;
+  background: #f7f7f7;
+}
+button:hover {
+  opacity: 0.9;
+}
