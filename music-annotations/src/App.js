@@ -1,14 +1,56 @@
 import React, { useState, useEffect } from "react";
 import { supabase } from "./supabaseClient";
 import AnnotationCanvas from "./AnnotationCanvas";
+import Login from "./Login";
+import VersionHistory from "./VersionHistory";
+import ConflictResolver from "./ConflictResolver";
 
 export default function App() {
+  const [user, setUser] = useState(null);
+  const [profile, setProfile] = useState(null);
   const [annotations, setAnnotations] = useState([]);
   const [saved, setSaved] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [conflicts, setConflicts] = useState([]);
+  const [showConflicts, setShowConflicts] = useState(false);
+  const [pendingAnnotations, setPendingAnnotations] = useState([]);
 
   useEffect(() => {
-    loadAnnotations();
+    checkUser();
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      (event, session) => {
+        if (session?.user) {
+          setUser(session.user);
+          loadProfile(session.user.id);
+          loadAnnotations();
+        } else {
+          setUser(null);
+          setProfile(null);
+        }
+      }
+    );
+    return () => {
+      authListener.subscription.unsubscribe();
+    };
   }, []);
+
+  async function checkUser() {
+    const { data } = await supabase.auth.getSession();
+    if (data.session?.user) {
+      setUser(data.session.user);
+      loadProfile(data.session.user.id);
+      loadAnnotations();
+    }
+  }
+
+  async function loadProfile(userId) {
+    const { data } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("user_id", userId)
+      .single();
+    if (data) setProfile(data);
+  }
 
   async function loadAnnotations() {
     const { data, error } = await supabase.from("annotations").select("*");
@@ -17,22 +59,147 @@ export default function App() {
   }
 
   const addAnnotation = (a) => {
-    setAnnotations((prev) => [...prev, a]);
+    setAnnotations((prev) => [
+      ...prev,
+      { ...a, created_by: user.id, version: 1 },
+    ]);
     setSaved(false);
   };
+
+  function detectConflicts(newAnnotations, existingAnnotations) {
+    const OVERLAP_THRESHOLD = 30;
+    const foundConflicts = [];
+
+    newAnnotations.forEach((newA) => {
+      existingAnnotations.forEach((existing) => {
+        const distance = Math.sqrt(
+          Math.pow(newA.x - existing.x, 2) + Math.pow(newA.y - existing.y, 2)
+        );
+        if (distance < OVERLAP_THRESHOLD) {
+          foundConflicts.push({
+            newAnnotation: newA,
+            existing: existing,
+          });
+        }
+      });
+    });
+
+    return foundConflicts;
+  }
 
   async function saveAnnotations() {
     const newOnes = annotations.filter((a) => !a.id);
     if (newOnes.length === 0) return alert("No new annotations to save!");
+
+    const existingOnes = annotations.filter((a) => a.id);
+    const foundConflicts = detectConflicts(newOnes, existingOnes);
+
+    if (foundConflicts.length > 0) {
+      const conflictsWithCreators = await Promise.all(
+        foundConflicts.map(async (conflict) => {
+          const { data: creator } = await supabase
+            .from("profiles")
+            .select("name, role")
+            .eq("user_id", conflict.existing.created_by)
+            .single();
+          return { ...conflict, existingCreator: creator };
+        })
+      );
+      setConflicts(conflictsWithCreators);
+      setPendingAnnotations(newOnes);
+      setShowConflicts(true);
+      return;
+    }
+
     const { error } = await supabase.from("annotations").insert(newOnes);
-    if (error) console.error(error);
-    else setSaved(true);
+    if (error) {
+      console.error(error);
+      alert("Error saving annotations: " + error.message);
+    } else {
+      setSaved(true);
+      await loadAnnotations();
+      setTimeout(() => setSaved(false), 2000);
+    }
+  }
+
+  async function handleConflictResolve(conflictIndex, resolution) {
+    const conflict = conflicts[conflictIndex];
+    const remainingConflicts = conflicts.filter((_, i) => i !== conflictIndex);
+
+    if (resolution === "keep-new") {
+      await supabase
+        .from("annotations")
+        .delete()
+        .eq("id", conflict.existing.id);
+    } else if (resolution === "keep-existing") {
+      setPendingAnnotations((prev) =>
+        prev.filter((a) => a !== conflict.newAnnotation)
+      );
+    }
+
+    if (remainingConflicts.length === 0) {
+      setShowConflicts(false);
+      const toSave = pendingAnnotations.filter((a) =>
+        conflicts.every((c) => c.newAnnotation !== a || resolution !== "keep-existing")
+      );
+      if (toSave.length > 0) {
+        const { error } = await supabase.from("annotations").insert(toSave);
+        if (error) {
+          console.error(error);
+          alert("Error saving annotations: " + error.message);
+        } else {
+          setSaved(true);
+          await loadAnnotations();
+          setTimeout(() => setSaved(false), 2000);
+        }
+      }
+      setConflicts([]);
+      setPendingAnnotations([]);
+    } else {
+      setConflicts(remainingConflicts);
+    }
+  }
+
+  async function logout() {
+    await supabase.auth.signOut();
+    setUser(null);
+    setProfile(null);
+    setAnnotations([]);
+  }
+
+  if (!user) {
+    return <Login onLogin={checkUser} />;
   }
 
   return (
     <div style={{ padding: 20 }}>
-      <h1>Sheet Music Annotations</h1>
-      <AnnotationCanvas annotations={annotations} addAnnotation={addAnnotation} />
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h1>Sheet Music Annotations</h1>
+        <div>
+          <span style={{ marginRight: 20 }}>
+            {profile?.name} ({profile?.role})
+          </span>
+          <button
+            onClick={logout}
+            style={{
+              padding: "5px 15px",
+              background: "#dc3545",
+              color: "white",
+              border: "none",
+              borderRadius: 5,
+              cursor: "pointer",
+            }}
+          >
+            Log Out
+          </button>
+        </div>
+      </div>
+      <AnnotationCanvas
+        annotations={annotations}
+        addAnnotation={addAnnotation}
+        user={user}
+        profile={profile}
+      />
       <button
         onClick={saveAnnotations}
         style={{
@@ -42,10 +209,40 @@ export default function App() {
           color: "white",
           border: "none",
           borderRadius: 5,
+          cursor: "pointer",
+          fontWeight: "bold",
         }}
       >
-        {saved ? "Changes Saved!" : "Apply All Changes"}
+        {saved ? "✓ Changes Saved!" : `Apply All Changes (${annotations.filter(a => !a.id).length} new)`}
       </button>
+      <button
+        onClick={() => setShowHistory(!showHistory)}
+        style={{
+          marginTop: "20px",
+          marginLeft: "10px",
+          padding: "10px 20px",
+          background: showHistory ? "#ff9800" : "#6c757d",
+          color: "white",
+          border: "none",
+          borderRadius: 5,
+          cursor: "pointer",
+          fontWeight: showHistory ? "bold" : "normal",
+        }}
+      >
+        {showHistory ? "✕ Hide History" : "📜 View History"}
+      </button>
+      {showHistory && <VersionHistory />}
+      {showConflicts && (
+        <ConflictResolver
+          conflicts={conflicts}
+          onResolve={handleConflictResolve}
+          onClose={() => {
+            setShowConflicts(false);
+            setConflicts([]);
+            setPendingAnnotations([]);
+          }}
+        />
+      )}
     </div>
   );
 }
