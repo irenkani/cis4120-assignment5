@@ -14,6 +14,12 @@ export default function App() {
   const [conflicts, setConflicts] = useState([]);
   const [showConflicts, setShowConflicts] = useState(false);
   const [pendingAnnotations, setPendingAnnotations] = useState([]);
+  const [currentPiece, setCurrentPiece] = useState("symphony-1");
+  const [pieces, setPieces] = useState([
+    { id: "symphony-1", name: "Symphony No. 1" },
+    { id: "symphony-2", name: "Symphony No. 2" },
+    { id: "canon-in-d", name: "Canon in D" },
+  ]);
 
   useEffect(() => {
     checkUser();
@@ -33,6 +39,12 @@ export default function App() {
       authListener.subscription.unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    if (user) {
+      loadAnnotations();
+    }
+  }, [currentPiece, user]);
 
   async function checkUser() {
     const { data } = await supabase.auth.getSession();
@@ -55,7 +67,7 @@ export default function App() {
   async function loadAnnotations() {
     const { data, error } = await supabase.from("annotations").select("*");
     if (error) console.error(error);
-    else setAnnotations(data);
+    else setAnnotations(data || []);
   }
 
   const addAnnotation = (a) => {
@@ -72,6 +84,8 @@ export default function App() {
 
     newAnnotations.forEach((newA) => {
       existingAnnotations.forEach((existing) => {
+        if (existing.piece_id !== newA.piece_id) return;
+        
         const distance = Math.sqrt(
           Math.pow(newA.x - existing.x, 2) + Math.pow(newA.y - existing.y, 2)
         );
@@ -171,6 +185,9 @@ export default function App() {
     return <Login onLogin={checkUser} />;
   }
 
+  const currentPieceAnnotations = annotations.filter(a => !a.piece_id || a.piece_id === currentPiece);
+  const newAnnotationsCount = currentPieceAnnotations.filter(a => !a.id).length;
+
   return (
     <div style={{ padding: 20 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -194,11 +211,43 @@ export default function App() {
           </button>
         </div>
       </div>
+
+      <div style={{ 
+        marginBottom: 20, 
+        padding: 15, 
+        background: "#d4f1d4", 
+        borderRadius: 8,
+        border: "2px solid #4caf50"
+      }}>
+        <strong style={{ fontSize: 18 }}>📚 Select Piece: </strong>
+        <select 
+          value={currentPiece} 
+          onChange={(e) => setCurrentPiece(e.target.value)}
+          style={{
+            marginLeft: 10,
+            padding: "8px 15px",
+            fontSize: 16,
+            fontFamily: "Gaegu, sans-serif",
+            borderRadius: 5,
+            border: "2px solid #4caf50",
+            cursor: "pointer"
+          }}
+        >
+          {pieces.map(p => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
+        </select>
+        <span style={{ marginLeft: 15, color: "#666" }}>
+          (Annotations are separate for each piece)
+        </span>
+      </div>
+
       <AnnotationCanvas
         annotations={annotations}
         addAnnotation={addAnnotation}
         user={user}
         profile={profile}
+        currentPieceId={currentPiece}
       />
       <button
         onClick={saveAnnotations}
@@ -231,7 +280,7 @@ export default function App() {
       >
         {showHistory ? "✕ Hide History" : "📜 View History"}
       </button>
-      {showHistory && <VersionHistory />}
+      {showHistory && <VersionHistory currentPieceId={currentPiece} />}
       {showConflicts && (
         <ConflictResolver
           conflicts={conflicts}
