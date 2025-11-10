@@ -10,30 +10,52 @@ export default function VersionHistory() {
   }, []);
 
   async function loadHistory() {
-    const { data: annotationsData } = await supabase
+    // Fetch annotations
+    const { data: annotationsData, error: annotationsError } = await supabase
       .from("annotations")
-      .select(`
-        *,
-        profiles:created_by (name, role)
-      `)
+      .select("*")
       .order("created_at", { ascending: false });
 
-    if (annotationsData) {
-      setAnnotations(annotationsData);
-      
+    if (annotationsError) {
+      console.error("Error loading annotations:", annotationsError);
+      return;
+    }
+
+    if (annotationsData && annotationsData.length > 0) {
+      // Fetch all profiles
+      const { data: profilesData } = await supabase
+        .from("profiles")
+        .select("user_id, name, role");
+
+      // Create a map of user_id to profile
+      const profilesMap = {};
+      if (profilesData) {
+        profilesData.forEach((p) => {
+          profilesMap[p.user_id] = p;
+        });
+      }
+
+      // Merge annotations with profile data
+      const annotationsWithProfiles = annotationsData.map((a) => ({
+        ...a,
+        profiles: profilesMap[a.created_by] || { name: "Unknown", role: "unknown" },
+      }));
+
+      setAnnotations(annotationsWithProfiles);
+
       const grouped = {};
-      annotationsData.forEach((a) => {
+      annotationsWithProfiles.forEach((a) => {
         const date = new Date(a.created_at).toLocaleDateString();
         if (!grouped[date]) grouped[date] = [];
         grouped[date].push(a);
       });
-      
+
       const historyList = Object.keys(grouped).map((date) => ({
         date,
         annotations: grouped[date],
         count: grouped[date].length,
       }));
-      
+
       setHistory(historyList);
     }
   }

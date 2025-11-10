@@ -17,18 +17,44 @@ export default function Login({ onLogin }) {
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
+        options: {
+          data: {
+            name: name,
+            role: role,
+          },
+        },
       });
       if (error) {
         setError(error.message);
       } else if (data.user) {
-        await supabase.from("profiles").insert({
+        // Wait a moment for auth to complete
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        // Insert profile with better error handling
+        const { error: profileError } = await supabase.from("profiles").insert({
           user_id: data.user.id,
           email: email,
           name: name,
           role: role,
         });
-        alert("Signup successful! Please log in.");
-        setIsSignup(false);
+        
+        if (profileError) {
+          console.error("Profile creation error:", profileError);
+          // Still show success but log the error
+          alert("Signup successful! Profile will be created on first login. Please log in now.");
+          setIsSignup(false);
+          setEmail("");
+          setPassword("");
+          setName("");
+          setRole("student");
+        } else {
+          alert("Signup successful! Please log in.");
+          setIsSignup(false);
+          setEmail("");
+          setPassword("");
+          setName("");
+          setRole("student");
+        }
       }
     } else {
       const { error } = await supabase.auth.signInWithPassword({

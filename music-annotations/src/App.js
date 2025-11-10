@@ -56,12 +56,38 @@ export default function App() {
   }
 
   async function loadProfile(userId) {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("profiles")
       .select("*")
       .eq("user_id", userId)
       .single();
-    if (data) setProfile(data);
+    
+    if (data) {
+      setProfile(data);
+    } else if (error) {
+      // Profile doesn't exist, create it
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const newProfile = {
+          user_id: userId,
+          email: user.email,
+          name: user.user_metadata?.name || user.email?.split('@')[0] || 'User',
+          role: user.user_metadata?.role || 'student',
+        };
+        
+        const { data: created, error: insertError } = await supabase
+          .from("profiles")
+          .insert(newProfile)
+          .select()
+          .single();
+        
+        if (created) {
+          setProfile(created);
+        } else {
+          console.error("Failed to create profile:", insertError);
+        }
+      }
+    }
   }
 
   async function loadAnnotations() {
