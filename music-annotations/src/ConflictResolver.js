@@ -9,7 +9,7 @@ export default function ConflictResolver({ conflicts, onResolve, onClose }) {
         left: 0,
         right: 0,
         bottom: 0,
-        background: "rgba(0,0,0,0.5)",
+        background: "rgba(0,0,0,0.7)",
         display: "flex",
         justifyContent: "center",
         alignItems: "center",
@@ -18,31 +18,31 @@ export default function ConflictResolver({ conflicts, onResolve, onClose }) {
     >
       <div
         style={{
-          background: "white",
+          background: "var(--dominant)",
           padding: 30,
-          borderRadius: 10,
-          maxWidth: 600,
-          maxHeight: "80vh",
+          borderRadius: 8,
+          maxWidth: 700,
+          maxHeight: "85vh",
           overflow: "auto",
+          border: "4px solid var(--accent-dark)"
         }}
       >
-        <h2>Annotation Conflicts Detected</h2>
-        <p>
-          Some annotations overlap with existing ones. Choose how to resolve
-          each conflict:
+        <h2 style={{ marginTop: 0 }}>⚠️ Annotation Conflicts Detected</h2>
+        <p style={{ fontSize: 16, marginBottom: 25 }}>
+          Some annotations overlap with existing ones. Choose how to resolve each conflict:
         </p>
         {conflicts.map((conflict, i) => (
           <div
             key={i}
             style={{
-              marginBottom: 20,
-              padding: 15,
-              border: "2px solid #ff9800",
-              borderRadius: 5,
-              background: "#fff3e0",
+              marginBottom: 25,
+              padding: 20,
+              border: "3px solid var(--accent-dark)",
+              borderRadius: 8,
+              background: "var(--accent-pink)",
             }}
           >
-            <h4>Conflict {i + 1}</h4>
+            <h4 style={{ marginTop: 0 }}>Conflict {i + 1}</h4>
             <div style={{ display: "flex", gap: 20, marginTop: 10 }}>
               <div style={{ flex: 1 }}>
                 <strong>Your New Annotation</strong>
@@ -99,17 +99,15 @@ export default function ConflictResolver({ conflicts, onResolve, onClose }) {
                 )}
               </div>
             </div>
-            <div style={{ marginTop: 15, display: "flex", gap: 10 }}>
+            <div style={{ marginTop: 20, display: "flex", gap: 12, flexWrap: "wrap" }}>
               <button
                 onClick={() => onResolve(i, "keep-new")}
                 style={{
                   flex: 1,
-                  padding: "8px 15px",
-                  background: "#4caf50",
-                  color: "white",
-                  border: "none",
-                  borderRadius: 5,
-                  cursor: "pointer",
+                  minWidth: 140,
+                  padding: "10px 15px",
+                  background: "var(--secondary)",
+                  color: "var(--accent-dark)"
                 }}
               >
                 Keep Mine
@@ -118,12 +116,10 @@ export default function ConflictResolver({ conflicts, onResolve, onClose }) {
                 onClick={() => onResolve(i, "keep-existing")}
                 style={{
                   flex: 1,
-                  padding: "8px 15px",
-                  background: "#2196f3",
-                  color: "white",
-                  border: "none",
-                  borderRadius: 5,
-                  cursor: "pointer",
+                  minWidth: 140,
+                  padding: "10px 15px",
+                  background: "var(--accent-mint)",
+                  color: "var(--accent-dark)"
                 }}
               >
                 Keep Existing
@@ -132,12 +128,10 @@ export default function ConflictResolver({ conflicts, onResolve, onClose }) {
                 onClick={() => onResolve(i, "keep-both")}
                 style={{
                   flex: 1,
-                  padding: "8px 15px",
-                  background: "#ff9800",
-                  color: "white",
-                  border: "none",
-                  borderRadius: 5,
-                  cursor: "pointer",
+                  minWidth: 140,
+                  padding: "10px 15px",
+                  background: "var(--accent-dark)",
+                  color: "white"
                 }}
               >
                 Keep Both
@@ -148,17 +142,15 @@ export default function ConflictResolver({ conflicts, onResolve, onClose }) {
         <button
           onClick={onClose}
           style={{
-            marginTop: 20,
-            padding: "10px 20px",
-            background: "#dc3545",
-            color: "white",
-            border: "none",
-            borderRadius: 5,
-            cursor: "pointer",
+            marginTop: 25,
+            padding: "12px 20px",
+            background: "var(--accent-pink)",
+            color: "var(--accent-dark)",
             width: "100%",
+            fontSize: 16
           }}
         >
-          Cancel Save
+          ✕ Cancel Save
         </button>
       </div>
     </div>

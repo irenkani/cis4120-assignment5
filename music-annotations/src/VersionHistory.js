@@ -61,32 +61,50 @@ export default function VersionHistory() {
   }
 
   return (
-    <div style={{ marginTop: 20, padding: 20, background: "white", border: "3px solid #007bff", borderRadius: 5 }}>
-      <h3 style={{ color: "#007bff", marginTop: 0 }}>📜 Annotation History</h3>
+    <div style={{ 
+      marginTop: 20, 
+      padding: 25, 
+      background: "white", 
+      border: "3px solid var(--accent-dark)", 
+      borderRadius: 8 
+    }}>
+      <h3 style={{ marginTop: 0, marginBottom: 20 }}>📜 Annotation History</h3>
       {history.length === 0 ? (
-        <div style={{ padding: 20, background: "#f0f8ff", borderRadius: 5, border: "1px dashed #007bff" }}>
-          <p style={{ margin: 0, fontSize: 16 }}>
+        <div style={{ 
+          padding: 20, 
+          background: "var(--accent-mint)", 
+          borderRadius: 8, 
+          border: "2px dashed var(--accent-dark)" 
+        }}>
+          <p style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>
             No history yet. Add some annotations and click "Apply All Changes" to save them!
           </p>
-          <p style={{ marginTop: 10, fontSize: 14, color: "#666" }}>
+          <p style={{ marginTop: 10, fontSize: 14, color: "var(--accent-dark)" }}>
             <strong>Note:</strong> Make sure you've run the database setup SQL commands to enable history tracking.
           </p>
         </div>
       ) : (
         history.map((entry, i) => (
-          <div key={i} style={{ marginBottom: 20, borderBottom: "1px solid #ddd", paddingBottom: 10 }}>
-            <h4>{entry.date}</h4>
-            <p>{entry.count} annotation(s) created</p>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+          <div key={i} style={{ 
+            marginBottom: 25, 
+            paddingBottom: 20, 
+            borderBottom: "2px solid var(--secondary)"
+          }}>
+            <h4 style={{ marginBottom: 10 }}>{entry.date}</h4>
+            <p style={{ color: "var(--accent-dark)", marginBottom: 15 }}>
+              {entry.count} annotation(s) created
+            </p>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 15 }}>
               {entry.annotations.map((a, j) => (
                 <div
                   key={j}
                   style={{
-                    padding: 10,
-                    border: "1px solid #ccc",
-                    borderRadius: 5,
-                    background: "#f9f9f9",
+                    padding: 15,
+                    border: "2px solid var(--accent-dark)",
+                    borderRadius: 8,
+                    background: "var(--dominant)",
                     fontSize: 14,
+                    minWidth: 180
                   }}
                 >
                   <div>

@@ -215,22 +215,34 @@ export default function App() {
   const newAnnotationsCount = currentPieceAnnotations.filter(a => !a.id).length;
 
   return (
-    <div style={{ padding: 20 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1>Sheet Music Annotations</h1>
-        <div>
-          <span style={{ marginRight: 20 }}>
+    <div style={{ padding: 30, maxWidth: 1400, margin: "0 auto" }}>
+      <div style={{ 
+        display: "flex", 
+        justifyContent: "space-between", 
+        alignItems: "center",
+        marginBottom: 20,
+        padding: 20,
+        background: "var(--secondary)",
+        borderRadius: 8,
+        border: "3px solid var(--accent-dark)"
+      }}>
+        <h1 style={{ margin: 0 }}>Sheet Music Annotations</h1>
+        <div style={{ display: "flex", alignItems: "center", gap: 15 }}>
+          <span style={{ 
+            fontWeight: 700,
+            color: "var(--accent-dark)",
+            background: "var(--accent-mint)",
+            padding: "8px 15px",
+            borderRadius: 5
+          }}>
             {profile?.name} ({profile?.role})
           </span>
           <button
             onClick={logout}
             style={{
-              padding: "5px 15px",
-              background: "#dc3545",
-              color: "white",
-              border: "none",
-              borderRadius: 5,
-              cursor: "pointer",
+              padding: "8px 15px",
+              background: "var(--accent-pink)",
+              color: "var(--accent-dark)"
             }}
           >
             Log Out
@@ -240,30 +252,31 @@ export default function App() {
 
       <div style={{ 
         marginBottom: 20, 
-        padding: 15, 
-        background: "#d4f1d4", 
+        padding: 20, 
+        background: "white", 
         borderRadius: 8,
-        border: "2px solid #4caf50"
+        border: "2px solid var(--accent-dark)"
       }}>
-        <strong style={{ fontSize: 18 }}>📚 Select Piece: </strong>
+        <label style={{ 
+          fontSize: 18, 
+          display: "inline-block",
+          marginRight: 15
+        }}>
+          📚 Select Piece
+        </label>
         <select 
           value={currentPiece} 
           onChange={(e) => setCurrentPiece(e.target.value)}
           style={{
-            marginLeft: 10,
             padding: "8px 15px",
-            fontSize: 16,
-            fontFamily: "Gaegu, sans-serif",
-            borderRadius: 5,
-            border: "2px solid #4caf50",
-            cursor: "pointer"
+            fontSize: 16
           }}
         >
           {pieces.map(p => (
             <option key={p.id} value={p.id}>{p.name}</option>
           ))}
         </select>
-        <span style={{ marginLeft: 15, color: "#666" }}>
+        <span style={{ marginLeft: 15, color: "var(--accent-dark)", fontSize: 14 }}>
           (Annotations are separate for each piece)
         </span>
       </div>
@@ -275,37 +288,35 @@ export default function App() {
         profile={profile}
         currentPieceId={currentPiece}
       />
-      <button
-        onClick={saveAnnotations}
-        style={{
-          marginTop: "20px",
-          padding: "10px 20px",
-          background: saved ? "#4caf50" : "#007bff",
-          color: "white",
-          border: "none",
-          borderRadius: 5,
-          cursor: "pointer",
-          fontWeight: "bold",
-        }}
-      >
-        {saved ? "✓ Changes Saved!" : `Apply All Changes (${annotations.filter(a => !a.id).length} new)`}
-      </button>
-      <button
-        onClick={() => setShowHistory(!showHistory)}
-        style={{
-          marginTop: "20px",
-          marginLeft: "10px",
-          padding: "10px 20px",
-          background: showHistory ? "#ff9800" : "#6c757d",
-          color: "white",
-          border: "none",
-          borderRadius: 5,
-          cursor: "pointer",
-          fontWeight: showHistory ? "bold" : "normal",
-        }}
-      >
-        {showHistory ? "✕ Hide History" : "📜 View History"}
-      </button>
+      <div style={{ 
+        marginTop: 20, 
+        display: "flex", 
+        gap: 15,
+        flexWrap: "wrap"
+      }}>
+        <button
+          onClick={saveAnnotations}
+          style={{
+            padding: "12px 25px",
+            background: saved ? "var(--secondary)" : "var(--accent-dark)",
+            color: saved ? "var(--accent-dark)" : "white",
+            fontSize: 16
+          }}
+        >
+          {saved ? "✓ Changes Saved!" : `Apply All Changes (${newAnnotationsCount} new)`}
+        </button>
+        <button
+          onClick={() => setShowHistory(!showHistory)}
+          style={{
+            padding: "12px 25px",
+            background: showHistory ? "var(--accent-mint)" : "var(--accent-dark)",
+            color: showHistory ? "var(--accent-dark)" : "white",
+            fontSize: 16
+          }}
+        >
+          {showHistory ? "✕ Hide History" : "📜 View History"}
+        </button>
+      </div>
       {showHistory && <VersionHistory currentPieceId={currentPiece} />}
       {showConflicts && (
         <ConflictResolver

@@ -110,49 +110,67 @@ export default function AnnotationCanvas({ annotations, addAnnotation, user, pro
 
   
   return (
-    <div style={{ textAlign: "center" }}>
-      <div style={{ marginBottom: 15, padding: 15, background: "#e8f5e9", borderRadius: 5 }}>
-        <strong>📄 Sheet Music: </strong>
+    <div>
+      <div style={{ 
+        marginBottom: 20, 
+        padding: 20, 
+        background: "white", 
+        borderRadius: 8,
+        border: "2px solid var(--accent-dark)"
+      }}>
+        <label style={{ fontSize: 18, marginRight: 10 }}>📄 Sheet Music</label>
         <input 
           type="file" 
           accept="image/*,application/pdf" 
           onChange={handleSheetMusicUpload}
-          style={{ marginLeft: 10 }}
+          style={{ fontSize: 14 }}
         />
-        {sheetMusicUrl && <span style={{ marginLeft: 10, color: "green" }}>✓ Loaded</span>}
-        {!sheetMusicUrl && <span style={{ marginLeft: 10, color: "gray" }}>(No sheet music loaded)</span>}
+        {sheetMusicUrl && <span style={{ marginLeft: 10, color: "var(--secondary)", fontWeight: 700 }}>✓ Loaded</span>}
+        {!sheetMusicUrl && <span style={{ marginLeft: 10, color: "var(--accent-dark)" }}>(No sheet music loaded)</span>}
       </div>
-      <div style={{ marginBottom: 10 }}>
-        <label>Mode: </label>
-        <select onChange={(e) => setMode(e.target.value)} value={mode}>
-          <option value="dot">Draw Dots</option>
-          <option value="sticker">Upload Sticker</option>
-        </select>
-        <span style={{ marginLeft: 20 }}>
-          <label>Show: </label>
+      <div style={{ 
+        marginBottom: 20, 
+        padding: 20, 
+        background: "var(--accent-mint)", 
+        borderRadius: 8,
+        border: "2px solid var(--accent-dark)",
+        display: "flex",
+        gap: 20,
+        flexWrap: "wrap",
+        alignItems: "center"
+      }}>
+        <div>
+          <label style={{ marginRight: 10 }}>Mode</label>
+          <select onChange={(e) => setMode(e.target.value)} value={mode}>
+            <option value="dot">Draw Dots</option>
+            <option value="sticker">Upload Sticker</option>
+          </select>
+        </div>
+        <div>
+          <label style={{ marginRight: 10 }}>Show</label>
           <select onChange={(e) => setFilterBy(e.target.value)} value={filterBy}>
             <option value="all">All Annotations</option>
             <option value="mine">My Annotations</option>
             <option value="others">Others' Annotations</option>
           </select>
-        </span>
+        </div>
+        {mode === "dot" && (
+          <div>
+            <label style={{ marginRight: 10 }}>Color</label>
+            <select onChange={(e) => setColor(e.target.value)} value={color}>
+              <option value="red">Red</option>
+              <option value="blue">Blue</option>
+              <option value="green">Green</option>
+            </select>
+          </div>
+        )}
+        {mode === "sticker" && (
+          <div>
+            <label style={{ marginRight: 10 }}>Upload Sticker</label>
+            <input type="file" accept="image/*" onChange={handleStickerUpload} />
+          </div>
+        )}
       </div>
-      {mode === "dot" && (
-        <div style={{ marginBottom: 10 }}>
-          <label>Color: </label>
-          <select onChange={(e) => setColor(e.target.value)}>
-            <option value="red">Red</option>
-            <option value="blue">Blue</option>
-            <option value="green">Green</option>
-          </select>
-        </div>
-      )}
-      {mode === "sticker" && (
-        <div style={{ marginBottom: 10 }}>
-          <label>Upload Sticker: </label>
-          <input type="file" accept="image/*" onChange={handleStickerUpload} />
-        </div>
-      )}
       <div style={{ position: "relative", display: "inline-block" }}>
         <canvas
           ref={canvasRef}
@@ -215,21 +233,34 @@ export default function AnnotationCanvas({ annotations, addAnnotation, user, pro
           return null;
         })}
       </div>
-      <div style={{ marginTop: 20, padding: 10, background: "#f0f0f0", borderRadius: 5, display: "inline-block" }}>
-        <strong>Legend:</strong>
-        <div style={{ display: "flex", gap: 20, marginTop: 5 }}>
-          <div>
-            <span style={{ display: "inline-block", width: 15, height: 15, background: "blue", border: "2px solid blue", marginRight: 5 }} />
-            Your annotations
+      <div style={{ 
+        marginTop: 20, 
+        padding: 20, 
+        background: "var(--secondary)", 
+        borderRadius: 8, 
+        border: "2px solid var(--accent-dark)"
+      }}>
+        <h4 style={{ marginTop: 0, marginBottom: 15 }}>Legend</h4>
+        <div style={{ display: "flex", gap: 20, marginTop: 10, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ display: "inline-block", width: 18, height: 18, background: "blue", border: "2px solid blue", borderRadius: "50%" }} />
+            <span>Your annotations</span>
           </div>
-          <div>
-            <span style={{ display: "inline-block", width: 15, height: 15, background: "orange", border: "2px solid orange", marginRight: 5 }} />
-            Others' annotations
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ display: "inline-block", width: 18, height: 18, background: "orange", border: "2px solid orange", borderRadius: "50%" }} />
+            <span>Others' annotations</span>
           </div>
         </div>
         {profile?.role === "teacher" && (
-          <div style={{ marginTop: 10, color: "#2196f3", fontWeight: "bold" }}>
-            🎓 Teacher Mode: You can edit and delete all annotations
+          <div style={{ 
+            marginTop: 15, 
+            padding: 12, 
+            background: "var(--accent-pink)", 
+            borderRadius: 5,
+            color: "var(--accent-dark)", 
+            fontWeight: 700 
+          }}>
+            🎓 TEACHER MODE: You can edit and delete all annotations
           </div>
         )}
       </div>

@@ -1,3 +1,12 @@
+/* Style Guide */
+:root {
+  --dominant: #FFFBF0;
+  --secondary: #DAF5D8;
+  --accent-dark: #525252;
+  --accent-mint: #DDF3EB;
+  --accent-pink: #FFDEDE;
+}
+
 .gaegu-regular {
   font-family: "Gaegu", sans-serif;
   font-weight: 400;
@@ -10,16 +19,45 @@
   font-style: normal;
 }
 
-code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
-    monospace;
+* {
+  font-family: "Gaegu", sans-serif;
 }
 
 body {
   font-family: "Gaegu", sans-serif;
-  background: #f7f7f7;
+  background: var(--dominant);
+  margin: 0;
+  padding: 0;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--accent-dark);
+}
+
+button {
+  font-family: "Gaegu", sans-serif;
+  font-weight: 700;
+  text-transform: uppercase;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: opacity 0.2s;
 }
 
 button:hover {
-  opacity: 0.9;
+  opacity: 0.85;
+}
+
+input, select, textarea {
+  font-family: "Gaegu", sans-serif;
+  border: 2px solid var(--accent-dark);
+  border-radius: 5px;
+  padding: 8px;
+}
+
+label {
+  font-weight: 700;
+  color: var(--accent-dark);
 }
