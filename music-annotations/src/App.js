@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { supabase } from "./supabaseClient";
-import AnnotationCanvas from "./AnnotationCanvas";
+import PDFViewer from "./PDFViewer";
+import AnnotationDetector from "./AnnotationDetector";
+import { downloadPDFWithAnnotations } from "./PDFDownloader";
 import Login from "./Login";
 import VersionHistory from "./VersionHistory";
 import ConflictResolver from "./ConflictResolver";
@@ -9,8 +11,10 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
   const [annotations, setAnnotations] = useState([]);
+  const [currentPiece, setCurrentPiece] = useState(null);
   const [saved, setSaved] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [showDetector, setShowDetector] = useState(false);
   const [conflicts, setConflicts] = useState([]);
   const [showConflicts, setShowConflicts] = useState(false);
   const [pendingAnnotations, setPendingAnnotations] = useState([]);
@@ -31,7 +35,6 @@ export default function App() {
         if (session?.user) {
           setUser(session.user);
           loadProfile(session.user.id);
-          loadAnnotations();
         } else {
           setUser(null);
           setProfile(null);
@@ -45,6 +48,12 @@ export default function App() {
 
   useEffect(() => {
     if (user) {
+      loadPieces();
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (user && currentPiece) {
       loadAnnotations();
     }
   }, [currentPiece, user]);
@@ -54,7 +63,23 @@ export default function App() {
     if (data.session?.user) {
       setUser(data.session.user);
       loadProfile(data.session.user.id);
-      loadAnnotations();
+    }
+  }
+
+  async function loadPieces() {
+    const { data, error } = await supabase
+      .from("pieces")
+      .select("*")
+      .order("name", { ascending: true });
+    
+    if (error) {
+      console.error("Error loading pieces:", error);
+    } else {
+      setPieces(data || []);
+      // Set default piece if none selected
+      if (!currentPiece && data && data.length > 0) {
+        setCurrentPiece(data[0]);
+      }
     }
   }
 
@@ -179,7 +204,7 @@ export default function App() {
 
     newAnnotations.forEach((newA) => {
       existingAnnotations.forEach((existing) => {
-        if (existing.piece_id !== newA.piece_id) return;
+        if (existing.piece_id !== newA.piece_id || existing.page !== newA.page) return;
         
         const distance = Math.sqrt(
           Math.pow(newA.x - existing.x, 2) + Math.pow(newA.y - existing.y, 2)
@@ -286,11 +311,211 @@ export default function App() {
     }
   }
 
+  async function handleDownload() {
+    if (!currentPiece?.pdf_url) {
+      alert("No PDF available for this piece.");
+      return;
+    }
+
+    setDownloading(true);
+    try {
+      await downloadPDFWithAnnotations(
+        currentPiece.pdf_url,
+        annotations.filter(a => a.piece_id === currentPiece.id),
+        `${currentPiece.name.replace(/\s+/g, '-')}.pdf`
+      );
+      alert("PDF downloaded successfully!");
+    } catch (error) {
+      console.error(error);
+      alert("Failed to download PDF: " + error.message);
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  async function handleDetectionComplete(detectedAnnotations) {
+    if (!detectedAnnotations || detectedAnnotations.length === 0) {
+      alert('No annotations were uploaded. Please try again.');
+      return;
+    }
+
+    if (!currentPiece || !user) {
+      alert('No piece or user found.');
+      return;
+    }
+
+    // Verify user.id is the auth UUID (not profile.id)
+    if (!user.id) {
+      alert('User ID not found. Please log out and log back in.');
+      return;
+    }
+
+    // Verify user has a profile with correct role (required by RLS policy)
+    if (!profile) {
+      alert('User profile not found. Please ensure your profile exists in the database.');
+      console.error('Profile missing for user:', user.id);
+      return;
+    }
+
+    if (!profile.role || !['student', 'teacher'].includes(profile.role)) {
+      alert(`User role '${profile.role || 'none'}' is not allowed. Must be 'student' or 'teacher'.`);
+      console.error('Invalid user role:', profile.role);
+      return;
+    }
+
+    console.log('Current user:', { id: user.id, email: user.email, role: profile.role });
+
+    // Map annotations to database rows - sticker_url is now a path, not a URL
+    const rows = detectedAnnotations.map(a => ({
+      piece_id: currentPiece.id,
+      page: a.page,
+      x: a.x,
+      y: a.y,
+      width: a.width,
+      height: a.height,
+      sticker_url: a.sticker_url,  // path string, from AnnotationDetector
+      type: 'sticker',
+      auto_detected: true,
+      created_by: user.id,         // auth user UUID
+    }));
+
+    console.log('Inserting annotations:', rows);
+
+    // Update local state immediately so the PDF updates right away
+    setAnnotations(prev => {
+      // Keep saved annotations (with id) and unsaved annotations for this piece
+      const saved = prev.filter(a => a.id);
+      const unsavedForThisPiece = prev.filter(a => !a.id && a.piece_id !== currentPiece.id);
+      // Add new annotations with is_mine flag for display
+      const withOwnership = rows.map(ann => ({
+        ...ann,
+        is_mine: true
+      }));
+      return [...saved, ...unsavedForThisPiece, ...withOwnership];
+    });
+    setSaved(false);
+
+    const { error, data } = await supabase
+      .from("annotations")
+      .insert(rows)
+      .select();
+
+    if (error) {
+      console.error('Error saving detected annotations:', error);
+      console.error('Error details:', {
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+        code: error.code
+      });
+      alert('Error saving detected annotations: ' + error.message + (error.details ? '\n' + error.details : ''));
+      // Remove from state if save failed
+      setAnnotations(prev => prev.filter(a => !rows.some(n => 
+        n.x === a.x && n.y === a.y && n.page === a.page && !a.id
+      )));
+      return;
+    }
+
+    console.log('Saved detected annotations:', data);
+
+    // Reload from DB so we have IDs and a clean state that matches what other users see
+    await loadAnnotations();
+
+    alert(
+      `Added and saved ${rows.length} new annotation(s). They are now visible on this PDF and to other users.`
+    );
+  }
+
+  async function handlePieceUpload(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    if (!file.name.toLowerCase().endsWith('.pdf')) {
+      alert("Please upload a PDF file.");
+      return;
+    }
+
+    setUploadingPiece(true);
+    try {
+      // Upload PDF to storage
+      const fileName = `${Date.now()}-${file.name}`;
+      const { error: uploadError } = await supabase.storage
+        .from("stickers")
+        .upload(fileName, file, { contentType: 'application/pdf' });
+
+      if (uploadError) {
+        throw uploadError;
+      }
+
+      // Get public URL
+      const { data: urlData } = supabase.storage
+        .from("stickers")
+        .getPublicUrl(fileName);
+
+      // Create piece record in database
+      const pieceName = file.name.replace('.pdf', '').replace(/-/g, ' ');
+      const pieceId = `piece-${Date.now()}`;
+      
+      const { error: dbError } = await supabase
+        .from("pieces")
+        .insert({
+          id: pieceId,
+          name: pieceName,
+          pdf_url: urlData.publicUrl,
+          base_pdf_url: urlData.publicUrl,
+          created_by: user.id
+        });
+
+      if (dbError) {
+        throw dbError;
+      }
+
+      alert("Piece uploaded successfully!");
+      await loadPieces();
+      e.target.value = ''; // Reset file input
+    } catch (error) {
+      console.error("Error uploading piece:", error);
+      alert("Failed to upload piece: " + error.message);
+    } finally {
+      setUploadingPiece(false);
+    }
+  }
+
+  async function handleDeletePiece(pieceId) {
+    if (!window.confirm("Are you sure you want to delete this piece? This will also delete all annotations for this piece.")) {
+      return;
+    }
+
+    try {
+      // Delete from database (cascade will handle annotations)
+      const { error } = await supabase
+        .from("pieces")
+        .delete()
+        .eq("id", pieceId);
+
+      if (error) throw error;
+
+      // If deleted piece was current, switch to first available
+      if (currentPiece?.id === pieceId) {
+        const remaining = pieces.filter(p => p.id !== pieceId);
+        setCurrentPiece(remaining.length > 0 ? remaining[0] : null);
+      }
+
+      await loadPieces();
+      alert("Piece deleted successfully!");
+    } catch (error) {
+      console.error("Error deleting piece:", error);
+      alert("Failed to delete piece: " + error.message);
+    }
+  }
+
   async function logout() {
     await supabase.auth.signOut();
     setUser(null);
     setProfile(null);
     setAnnotations([]);
+    setPieces([]);
+    setCurrentPiece(null);
   }
 
   if (!user) {
@@ -311,34 +536,33 @@ export default function App() {
   };
 
   return (
-    <div style={{ padding: 30, maxWidth: 1400, margin: "0 auto" }}>
+    <div style={{ padding: 20, fontFamily: "Gaegu, sans-serif", background: "#faf8f3", minHeight: "100vh" }}>
+      {/* Header */}
       <div style={{ 
         display: "flex", 
         justifyContent: "space-between", 
-        alignItems: "center",
+        alignItems: "center", 
         marginBottom: 20,
-        padding: 20,
-        background: "var(--secondary)",
-        borderRadius: 8,
-        border: "3px solid var(--accent-dark)"
+        padding: 15,
+        background: "#d4f1d4",
+        borderRadius: 8
       }}>
-        <h1 style={{ margin: 0 }}>Sheet Music Annotations</h1>
+        <h1 style={{ margin: 0 }}>🎵 ScoreHub</h1>
         <div style={{ display: "flex", alignItems: "center", gap: 15 }}>
-          <span style={{ 
-            fontWeight: 700,
-            color: "var(--accent-dark)",
-            background: "var(--accent-mint)",
-            padding: "8px 15px",
-            borderRadius: 5
-          }}>
-            {profile?.name} ({profile?.role})
+          <span style={{ fontSize: 18 }}>
+            <strong>{profile?.name}</strong> ({profile?.role})
           </span>
           <button
             onClick={logout}
             style={{
-              padding: "8px 15px",
-              background: "var(--accent-pink)",
-              color: "var(--accent-dark)"
+              padding: "8px 20px",
+              background: "#dc3545",
+              color: "white",
+              border: "none",
+              borderRadius: 5,
+              cursor: "pointer",
+              fontFamily: "Gaegu, sans-serif",
+              fontSize: 16,
             }}
           >
             Log Out
@@ -346,35 +570,139 @@ export default function App() {
         </div>
       </div>
 
+      {/* Piece Selection */}
       <div style={{ 
-        marginBottom: 20, 
-        padding: 20, 
-        background: "white", 
+        marginBottom: 20,
+        padding: 15,
+        background: "white",
         borderRadius: 8,
         border: "2px solid var(--accent-dark)"
       }}>
-        <label style={{ 
-          fontSize: 18, 
-          display: "inline-block",
-          marginRight: 15
-        }}>
-          📚 Select Piece
-        </label>
-        <select 
-          value={currentPiece} 
-          onChange={(e) => setCurrentPiece(e.target.value)}
-          style={{
-            padding: "8px 15px",
-            fontSize: 16
-          }}
-        >
-          {pieces.map(p => (
-            <option key={p.id} value={p.id}>{p.name}</option>
-          ))}
-        </select>
-        <span style={{ marginLeft: 15, color: "var(--accent-dark)", fontSize: 14 }}>
-          (Annotations are separate for each piece)
-        </span>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+            <strong style={{ fontSize: 18 }}>📚 Select Piece: </strong>
+            <select 
+              value={currentPiece?.id || ''} 
+              onChange={(e) => setCurrentPiece(pieces.find(p => p.id === e.target.value))}
+              style={{
+                padding: "8px 15px",
+                fontSize: 16,
+                fontFamily: "Gaegu, sans-serif",
+                borderRadius: 5,
+                border: "2px solid #4caf50",
+                cursor: "pointer"
+              }}
+            >
+              {pieces.length === 0 ? (
+                <option value="">No pieces available</option>
+              ) : (
+                pieces.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))
+              )}
+            </select>
+            <span style={{ color: "#666" }}>
+              (Annotations are separate for each piece)
+            </span>
+          </div>
+          {profile?.role === 'teacher' && (
+            <button
+              onClick={() => setShowPieceManager(!showPieceManager)}
+              style={{
+                padding: "8px 15px",
+                background: showPieceManager ? "#ff9800" : "#4caf50",
+                color: "white",
+                border: "none",
+                borderRadius: 5,
+                cursor: "pointer",
+                fontFamily: "Gaegu, sans-serif",
+                fontSize: 14,
+                fontWeight: "bold"
+              }}
+            >
+              {showPieceManager ? "✕ Close Manager" : "⚙️ Manage Pieces"}
+            </button>
+          )}
+        </div>
+        
+        {/* Piece Management UI (Teachers only) */}
+        {showPieceManager && profile?.role === 'teacher' && (
+          <div style={{ 
+            marginTop: 20, 
+            padding: 20, 
+            background: "#f0f8ff", 
+            borderRadius: 8,
+            border: "2px solid #4caf50"
+          }}>
+            <h3 style={{ marginTop: 0, color: "#4caf50" }}>📁 Piece Management</h3>
+            
+            {/* Upload New Piece */}
+            <div style={{ marginBottom: 20 }}>
+              <label style={{ display: "block", marginBottom: 10, fontWeight: "bold" }}>
+                Upload New Piece (PDF):
+              </label>
+              <input
+                type="file"
+                accept="application/pdf"
+                onChange={handlePieceUpload}
+                disabled={uploadingPiece}
+                style={{
+                  padding: "8px",
+                  border: "2px dashed #4caf50",
+                  borderRadius: 5,
+                  width: "100%",
+                  cursor: uploadingPiece ? 'wait' : 'pointer'
+                }}
+              />
+              {uploadingPiece && <p style={{ color: "#666", marginTop: 5 }}>⏳ Uploading...</p>}
+            </div>
+
+            {/* List of Pieces */}
+            <div>
+              <strong style={{ display: "block", marginBottom: 10 }}>All Pieces ({pieces.length}):</strong>
+              {pieces.length === 0 ? (
+                <p style={{ color: "#666", fontStyle: "italic" }}>No pieces uploaded yet. Upload a PDF to get started!</p>
+              ) : (
+                <div style={{ maxHeight: "300px", overflowY: "auto" }}>
+                  {pieces.map(piece => (
+                    <div
+                      key={piece.id}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        padding: "10px",
+                        marginBottom: 8,
+                        background: currentPiece?.id === piece.id ? "#e8f5e9" : "white",
+                        border: currentPiece?.id === piece.id ? "2px solid #4caf50" : "1px solid #ddd",
+                        borderRadius: 5
+                      }}
+                    >
+                      <div>
+                        <strong>{piece.name}</strong>
+                        {currentPiece?.id === piece.id && <span style={{ marginLeft: 10, color: "#4caf50" }}>✓ Current</span>}
+                      </div>
+                      <button
+                        onClick={() => handleDeletePiece(piece.id)}
+                        style={{
+                          padding: "5px 15px",
+                          background: "#dc3545",
+                          color: "white",
+                          border: "none",
+                          borderRadius: 5,
+                          cursor: "pointer",
+                          fontSize: 12
+                        }}
+                      >
+                        🗑️ Delete
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       <AnnotationCanvas
@@ -386,7 +714,6 @@ export default function App() {
         currentPieceId={currentPiece}
       />
       <div style={{ 
-        marginTop: 20, 
         display: "flex", 
         gap: 15,
         flexWrap: "wrap",
@@ -436,19 +763,37 @@ export default function App() {
         >
           {saved ? "✓ Changes Saved!" : `Apply All Changes (${getChangesText()})`}
         </button>
+        
         <button
           onClick={() => setShowHistory(!showHistory)}
           style={{
             padding: "12px 25px",
-            background: showHistory ? "var(--accent-mint)" : "var(--accent-dark)",
-            color: showHistory ? "var(--accent-dark)" : "white",
-            fontSize: 16
+            background: showHistory ? "#ff9800" : "#6c757d",
+            color: "white",
+            border: "none",
+            borderRadius: 5,
+            cursor: "pointer",
+            fontWeight: showHistory ? "bold" : "normal",
+            fontSize: 16,
+            fontFamily: "Gaegu, sans-serif",
           }}
         >
           {showHistory ? "✕ Hide History" : "📜 View History"}
         </button>
       </div>
-      {showHistory && <VersionHistory currentPieceId={currentPiece} />}
+
+      {showHistory && <VersionHistory currentPieceId={currentPiece?.id} />}
+      
+      {showDetector && (
+        <AnnotationDetector
+          basePdfUrl={currentPiece?.pdf_url}
+          onDetectionComplete={handleDetectionComplete}
+          onClose={() => setShowDetector(false)}
+          currentPiece={currentPiece}
+          user={user}
+        />
+      )}
+      
       {showConflicts && (
         <ConflictResolver
           conflicts={conflicts}
