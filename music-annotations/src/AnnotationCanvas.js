@@ -4,13 +4,13 @@ import { GlobalWorkerOptions, getDocument } from "pdfjs-dist/legacy/build/pdf";
 GlobalWorkerOptions.workerSrc = `${process.env.PUBLIC_URL || ""}/pdf.worker.min.mjs`;
 
 
-export default function AnnotationCanvas({ annotations, addAnnotation, user, profile }) {
+export default function AnnotationCanvas({ annotations, addAnnotation, user, profile, deleteAnnotation, currentPieceId }) {
   const canvasRef = useRef(null);
   const [color, setColor] = useState("red");
   const [mode, setMode] = useState("dot");
   const [filterBy, setFilterBy] = useState("all");
   const [sheetMusicUrl, setSheetMusicUrl] = useState(null);
-  const [currentPieceId, setCurrentPieceId] = useState(null);
+  const [isDeleteMode, setIsDeleteMode] = useState(false);
   const SHEET_BUCKET = "sheet-music";
   const STICKER_BUCKET = "stickers";
 
@@ -50,7 +50,7 @@ export default function AnnotationCanvas({ annotations, addAnnotation, user, pro
   }, [sheetMusicUrl]);
 
   const handleClick = (e) => {
-    if (mode !== "dot") return;
+    if (mode !== "dot" || isDeleteMode) return; // Don't add annotations in delete mode
     const rect = canvasRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
@@ -108,6 +108,23 @@ export default function AnnotationCanvas({ annotations, addAnnotation, user, pro
     return true;
   });
 
+  const handleAnnotationClick = (annotation, e) => {
+    e.stopPropagation(); // Prevent canvas click from firing
+    
+    // Only handle delete if in delete mode
+    if (!isDeleteMode) return;
+    
+    const isMine = annotation.created_by === user.id;
+    const isTeacher = profile?.role === "teacher";
+    
+    // Teachers can delete all annotations, students can only delete their own
+    if (isTeacher || isMine) {
+      deleteAnnotation(annotation);
+    } else {
+      alert("You can only delete your own annotations.");
+    }
+  };
+
   
   return (
     <div>
@@ -128,6 +145,21 @@ export default function AnnotationCanvas({ annotations, addAnnotation, user, pro
         {sheetMusicUrl && <span style={{ marginLeft: 10, color: "var(--secondary)", fontWeight: 700 }}>✓ Loaded</span>}
         {!sheetMusicUrl && <span style={{ marginLeft: 10, color: "var(--accent-dark)" }}>(No sheet music loaded)</span>}
       </div>
+      {isDeleteMode && (
+        <div style={{
+          marginBottom: 15,
+          padding: 15,
+          background: "#ff6b6b",
+          color: "white",
+          borderRadius: 8,
+          border: "2px solid #c92a2a",
+          fontWeight: 700,
+          textAlign: "center",
+          fontSize: 16
+        }}>
+          🗑️ DELETE MODE ACTIVE - Click any annotation to delete it (Click "Exit Delete Mode" to return to normal mode)
+        </div>
+      )}
       <div style={{ 
         marginBottom: 20, 
         padding: 20, 
@@ -141,10 +173,34 @@ export default function AnnotationCanvas({ annotations, addAnnotation, user, pro
       }}>
         <div>
           <label style={{ marginRight: 10 }}>Mode</label>
-          <select onChange={(e) => setMode(e.target.value)} value={mode}>
+          <select 
+            onChange={(e) => {
+              setMode(e.target.value);
+              setIsDeleteMode(false); // Exit delete mode when changing modes
+            }} 
+            value={mode}
+            disabled={isDeleteMode}
+          >
             <option value="dot">Draw Dots</option>
             <option value="sticker">Upload Sticker</option>
           </select>
+        </div>
+        <div>
+          <button
+            onClick={() => setIsDeleteMode(!isDeleteMode)}
+            style={{
+              padding: "8px 16px",
+              background: isDeleteMode ? "#ff6b6b" : "var(--accent-dark)",
+              color: "white",
+              fontSize: 14,
+              fontWeight: 700,
+              border: "2px solid var(--accent-dark)",
+              borderRadius: 5,
+              cursor: "pointer"
+            }}
+          >
+            {isDeleteMode ? "✓ Exit Delete Mode" : "🗑️ Delete Mode"}
+          </button>
         </div>
         <div>
           <label style={{ marginRight: 10 }}>Show</label>
@@ -154,7 +210,7 @@ export default function AnnotationCanvas({ annotations, addAnnotation, user, pro
             <option value="others">Others' Annotations</option>
           </select>
         </div>
-        {mode === "dot" && (
+        {mode === "dot" && !isDeleteMode && (
           <div>
             <label style={{ marginRight: 10 }}>Color</label>
             <select onChange={(e) => setColor(e.target.value)} value={color}>
@@ -164,7 +220,7 @@ export default function AnnotationCanvas({ annotations, addAnnotation, user, pro
             </select>
           </div>
         )}
-        {mode === "sticker" && (
+        {mode === "sticker" && !isDeleteMode && (
           <div>
             <label style={{ marginRight: 10 }}>Upload Sticker</label>
             <input type="file" accept="image/*" onChange={handleStickerUpload} />
@@ -181,22 +237,37 @@ export default function AnnotationCanvas({ annotations, addAnnotation, user, pro
             border: "1px solid #ccc", 
             marginTop: "10px", 
             background: sheetMusicUrl ? "transparent" : "white", 
-            cursor: mode === "dot" ? "crosshair" : "default"}}
+            cursor: isDeleteMode ? "not-allowed" : (mode === "dot" ? "crosshair" : "default")
+          }}
         />
         {filteredAnnotations.map((a, i) => {
           const isMine = a.created_by === user.id;
+          const isTeacher = profile?.role === "teacher";
+          const canDelete = isTeacher || isMine;
           const border = isMine ? "2px solid blue" : "2px solid orange";
+          
+          // In delete mode, make annotations clickable; otherwise make them click-through
+          const pointerEvents = isDeleteMode ? "auto" : "none";
+          const hoverHint = isDeleteMode
+            ? (canDelete ? "Click to delete" : "You cannot delete this annotation")
+            : "Annotation (Enter delete mode to remove)";
+          const cursorStyle = isDeleteMode 
+            ? (canDelete ? "pointer" : "not-allowed")
+            : "crosshair";
           
           if (a.type === "sticker" && a.sticker_url) {
             return (
               <div
                 key={i}
+                onClick={(e) => handleAnnotationClick(a, e)}
                 style={{
                   position: "absolute",
                   left: a.x,
                   top: a.y,
+                  pointerEvents: pointerEvents,
+                  cursor: cursorStyle,
                 }}
-                title={isMine ? "Your annotation" : "Others' annotation"}
+                title={hoverHint}
               >
                 <img
                   src={a.sticker_url}
@@ -204,9 +275,9 @@ export default function AnnotationCanvas({ annotations, addAnnotation, user, pro
                   style={{
                     width: 50,
                     height: 50,
-                    cursor: "pointer",
                     border: border,
                     borderRadius: 5,
+                    pointerEvents: "none", // Let parent div handle clicks
                   }}
                 />
               </div>
@@ -215,6 +286,7 @@ export default function AnnotationCanvas({ annotations, addAnnotation, user, pro
             return (
               <div
                 key={i}
+                onClick={(e) => handleAnnotationClick(a, e)}
                 style={{
                   position: "absolute",
                   left: a.x - 5,
@@ -225,8 +297,10 @@ export default function AnnotationCanvas({ annotations, addAnnotation, user, pro
                   background: a.color,
                   border: isMine ? "2px solid blue" : "2px solid orange",
                   boxShadow: "0 0 3px rgba(0,0,0,0.3)",
+                  pointerEvents: pointerEvents,
+                  cursor: cursorStyle,
                 }}
-                title={isMine ? "Your annotation" : "Others' annotation"}
+                title={hoverHint}
               />
             );
           }
@@ -260,7 +334,7 @@ export default function AnnotationCanvas({ annotations, addAnnotation, user, pro
             color: "var(--accent-dark)", 
             fontWeight: 700 
           }}>
-            🎓 TEACHER MODE: You can edit and delete all annotations
+            🎓 TEACHER MODE: You can delete all annotations and override student annotations
           </div>
         )}
       </div>

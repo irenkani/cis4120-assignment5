@@ -1,19 +1,34 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { supabase } from "./supabaseClient";
 
-export default function VersionHistory() {
-  const [history, setHistory] = useState([]);
-  const [annotations, setAnnotations] = useState([]);
+export default function VersionHistory({ currentPieceId }) {
+  const [commits, setCommits] = useState([]);
+  const [expandedCommits, setExpandedCommits] = useState(new Set());
 
-  useEffect(() => {
-    loadHistory();
-  }, []);
+  function formatTimeAgo(dateString) {
+    const date = new Date(dateString);
+    const now = new Date();
+    const seconds = Math.floor((now - date) / 1000);
+    
+    if (seconds < 60) return "just now";
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes} minute${minutes !== 1 ? 's' : ''} ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours} hour${hours !== 1 ? 's' : ''} ago`;
+    const days = Math.floor(hours / 24);
+    if (days < 30) return `${days} day${days !== 1 ? 's' : ''} ago`;
+    const months = Math.floor(days / 30);
+    if (months < 12) return `${months} month${months !== 1 ? 's' : ''} ago`;
+    const years = Math.floor(months / 12);
+    return `${years} year${years !== 1 ? 's' : ''} ago`;
+  }
 
-  async function loadHistory() {
-    // Fetch annotations
+  const loadHistory = useCallback(async () => {
+    // Fetch annotations for current piece
     const { data: annotationsData, error: annotationsError } = await supabase
       .from("annotations")
       .select("*")
+      .eq("piece_id", currentPieceId)
       .order("created_at", { ascending: false });
 
     if (annotationsError) {
@@ -35,30 +50,44 @@ export default function VersionHistory() {
         });
       }
 
-      // Merge annotations with profile data
-      const annotationsWithProfiles = annotationsData.map((a) => ({
-        ...a,
-        profiles: profilesMap[a.created_by] || { name: "Unknown", role: "unknown" },
-      }));
-
-      setAnnotations(annotationsWithProfiles);
-
-      const grouped = {};
-      annotationsWithProfiles.forEach((a) => {
-        const date = new Date(a.created_at).toLocaleDateString();
-        if (!grouped[date]) grouped[date] = [];
-        grouped[date].push(a);
+      // Group by created_at timestamp (same batch save) and user
+      const commitGroups = {};
+      annotationsData.forEach((a) => {
+        // Group by created_at rounded to the nearest second and user
+        const commitKey = `${a.created_by}-${new Date(a.created_at).toISOString().split('.')[0]}`;
+        if (!commitGroups[commitKey]) {
+          commitGroups[commitKey] = {
+            timestamp: a.created_at,
+            user: profilesMap[a.created_by] || { name: "Unknown", role: "unknown" },
+            userId: a.created_by,
+            annotations: [],
+          };
+        }
+        commitGroups[commitKey].annotations.push(a);
       });
 
-      const historyList = Object.keys(grouped).map((date) => ({
-        date,
-        annotations: grouped[date],
-        count: grouped[date].length,
-      }));
+      // Convert to array and sort by timestamp
+      const commitsList = Object.values(commitGroups).sort(
+        (a, b) => new Date(b.timestamp) - new Date(a.timestamp)
+      );
 
-      setHistory(historyList);
+      setCommits(commitsList);
     }
-  }
+  }, [currentPieceId]);
+
+  useEffect(() => {
+    loadHistory();
+  }, [loadHistory]);
+
+  const toggleCommit = (index) => {
+    const newExpanded = new Set(expandedCommits);
+    if (newExpanded.has(index)) {
+      newExpanded.delete(index);
+    } else {
+      newExpanded.add(index);
+    }
+    setExpandedCommits(newExpanded);
+  };
 
   return (
     <div style={{ 
@@ -68,77 +97,157 @@ export default function VersionHistory() {
       border: "3px solid var(--accent-dark)", 
       borderRadius: 8 
     }}>
-      <h3 style={{ marginTop: 0, marginBottom: 20 }}>📜 Annotation History</h3>
-      {history.length === 0 ? (
+      <div style={{ 
+        display: "flex", 
+        alignItems: "center", 
+        justifyContent: "space-between",
+        marginBottom: 20,
+        paddingBottom: 15,
+        borderBottom: "2px solid var(--secondary)"
+      }}>
+        <h3 style={{ margin: 0 }}>📜 Version History</h3>
+        <span style={{ fontSize: 14, color: "var(--accent-dark)" }}>
+          {commits.length} version{commits.length !== 1 ? 's' : ''}
+        </span>
+      </div>
+
+      {commits.length === 0 ? (
         <div style={{ 
-          padding: 20, 
+          padding: 30, 
           background: "var(--accent-mint)", 
           borderRadius: 8, 
-          border: "2px dashed var(--accent-dark)" 
+          border: "2px dashed var(--accent-dark)",
+          textAlign: "center"
         }}>
           <p style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>
-            No history yet. Add some annotations and click "Apply All Changes" to save them!
+            No versions yet
           </p>
           <p style={{ marginTop: 10, fontSize: 14, color: "var(--accent-dark)" }}>
-            <strong>Note:</strong> Make sure you've run the database setup SQL commands to enable history tracking.
+            Add annotations and click "Apply All Changes" to save your first version!
           </p>
         </div>
       ) : (
-        history.map((entry, i) => (
-          <div key={i} style={{ 
-            marginBottom: 25, 
-            paddingBottom: 20, 
-            borderBottom: "2px solid var(--secondary)"
-          }}>
-            <h4 style={{ marginBottom: 10 }}>{entry.date}</h4>
-            <p style={{ color: "var(--accent-dark)", marginBottom: 15 }}>
-              {entry.count} annotation(s) created
-            </p>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 15 }}>
-              {entry.annotations.map((a, j) => (
-                <div
-                  key={j}
-                  style={{
-                    padding: 15,
-                    border: "2px solid var(--accent-dark)",
-                    borderRadius: 8,
-                    background: "var(--dominant)",
-                    fontSize: 14,
-                    minWidth: 180
-                  }}
-                >
-                  <div>
-                    <strong>Type:</strong> {a.type}
-                  </div>
-                  <div>
-                    <strong>Position:</strong> ({a.x.toFixed(0)}, {a.y.toFixed(0)})
-                  </div>
-                  {a.color && (
-                    <div>
-                      <strong>Color:</strong>{" "}
-                      <span
-                        style={{
-                          display: "inline-block",
-                          width: 15,
-                          height: 15,
-                          background: a.color,
-                          border: "1px solid #000",
-                        }}
-                      />
+        <div style={{ position: "relative" }}>
+          {commits.map((commit, i) => {
+            const isExpanded = expandedCommits.has(i);
+            const isLast = i === commits.length - 1;
+            
+            return (
+              <div key={i} style={{ position: "relative", paddingLeft: 45, marginBottom: 15 }}>
+                {/* Timeline line */}
+                {!isLast && (
+                  <div style={{
+                    position: "absolute",
+                    left: 12,
+                    top: 30,
+                    bottom: -15,
+                    width: 2,
+                    background: "var(--secondary)"
+                  }} />
+                )}
+                
+                {/* Version dot */}
+                <div style={{
+                  position: "absolute",
+                  left: 6,
+                  top: 8,
+                  width: 14,
+                  height: 14,
+                  borderRadius: "50%",
+                  background: commit.user.role === "teacher" ? "#ff6b6b" : "var(--accent-dark)",
+                  border: "3px solid white",
+                  boxShadow: "0 0 0 2px var(--accent-dark)"
+                }} />
+
+                {/* Version card */}
+                <div style={{
+                  border: "2px solid var(--accent-dark)",
+                  borderRadius: 8,
+                  background: "var(--dominant)",
+                  overflow: "hidden"
+                }}>
+                  {/* Version header */}
+                  <div 
+                    onClick={() => toggleCommit(i)}
+                    style={{
+                      padding: "12px 15px",
+                      background: "var(--accent-mint)",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between"
+                    }}
+                  >
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>
+                        {commit.user.role === "teacher" && "🎓 "}
+                        {commit.user.name} added {commit.annotations.length} annotation{commit.annotations.length !== 1 ? 's' : ''}
+                      </div>
+                      <div style={{ fontSize: 13, color: "var(--accent-dark)" }}>
+                        {formatTimeAgo(commit.timestamp)} • {new Date(commit.timestamp).toLocaleString()}
+                      </div>
                     </div>
-                  )}
-                  {a.profiles && (
-                    <div>
-                      <strong>By:</strong> {a.profiles.name} ({a.profiles.role})
+                    <div style={{ 
+                      fontSize: 18, 
+                      color: "var(--accent-dark)",
+                      transition: "transform 0.2s",
+                      transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)"
+                    }}>
+                      ▼
+                    </div>
+                  </div>
+
+                  {/* Version details (expandable) */}
+                  {isExpanded && (
+                    <div style={{ padding: 15 }}>
+                      <div style={{ 
+                        display: "grid", 
+                        gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", 
+                        gap: 12 
+                      }}>
+                        {commit.annotations.map((a, j) => (
+                          <div
+                            key={j}
+                            style={{
+                              padding: 12,
+                              border: "1px solid var(--accent-dark)",
+                              borderRadius: 6,
+                              background: "white",
+                              fontSize: 13
+                            }}
+                          >
+                            <div style={{ marginBottom: 6, fontWeight: 700, color: "var(--accent-dark)" }}>
+                              {a.type === "dot" ? "● Dot" : "🖼️ Sticker"}
+                            </div>
+                            <div>Position: ({a.x.toFixed(0)}, {a.y.toFixed(0)})</div>
+                            {a.color && (
+                              <div style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
+                                Color:{" "}
+                                <span
+                                  style={{
+                                    display: "inline-block",
+                                    width: 16,
+                                    height: 16,
+                                    background: a.color,
+                                    border: "1px solid #000",
+                                    borderRadius: 3
+                                  }}
+                                />
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>
-              ))}
-            </div>
-          </div>
-        ))
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );
 }
+
 
