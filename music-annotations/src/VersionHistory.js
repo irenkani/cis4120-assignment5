@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { supabase } from "./supabaseClient";
 
-export default function VersionHistory({ currentPieceId }) {
+export default function VersionHistory({ currentPieceId, onRevert, userRole }) {
   const [commits, setCommits] = useState([]);
   const [expandedCommits, setExpandedCommits] = useState(new Set());
 
@@ -238,6 +238,31 @@ export default function VersionHistory({ currentPieceId }) {
                           </div>
                         ))}
                       </div>
+                      
+                      {/* Revert button - only show for teachers */}
+                      {onRevert && userRole === 'teacher' && (
+                        <div style={{ marginTop: 15, paddingTop: 15, borderTop: "2px solid var(--secondary)" }}>
+                          <button
+                            onClick={() => onRevert(commit.timestamp)}
+                            style={{
+                              padding: "10px 20px",
+                              background: "#dc3545",
+                              color: "white",
+                              border: "none",
+                              borderRadius: 5,
+                              cursor: "pointer",
+                              fontSize: 14,
+                              fontWeight: 700,
+                              fontFamily: "Gaegu, sans-serif"
+                            }}
+                          >
+                            ⏪ Revert to This Version
+                          </button>
+                          <p style={{ marginTop: 8, fontSize: 12, color: "#666", fontStyle: "italic" }}>
+                            This will delete all annotations created after this version.
+                          </p>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

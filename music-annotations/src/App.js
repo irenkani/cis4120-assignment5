@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { supabase } from "./supabaseClient";
+import AnnotationCanvas from "./AnnotationCanvas";
 import PDFViewer from "./PDFViewer";
 import AnnotationDetector from "./AnnotationDetector";
 import { downloadPDFWithAnnotations } from "./PDFDownloader";
@@ -21,12 +22,11 @@ export default function App() {
   const [pendingDeletions, setPendingDeletions] = useState([]);
   const [history, setHistory] = useState([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
-  const [currentPiece, setCurrentPiece] = useState("symphony-1");
-  const [pieces, setPieces] = useState([
-    { id: "symphony-1", name: "Symphony No. 1" },
-    { id: "symphony-2", name: "Symphony No. 2" },
-    { id: "canon-in-d", name: "Canon in D" },
-  ]);
+  const [pieces, setPieces] = useState([]);
+  const [showPieceManager, setShowPieceManager] = useState(false);
+  const [uploadingPiece, setUploadingPiece] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [isDeleteMode, setIsDeleteMode] = useState(false);
 
   useEffect(() => {
     checkUser();
@@ -288,8 +288,11 @@ export default function App() {
     const remainingConflicts = conflicts.filter((_, i) => i !== conflictIndex);
 
     if (resolution === "keep-new") {
-      // Mark existing annotation for deletion
-      setPendingDeletions((prev) => [...prev, conflict.existing]);
+      // Delete existing annotation from database
+      await supabase
+        .from("annotations")
+        .delete()
+        .eq("id", conflict.existing.id);
       // Remove from visible annotations
       setAnnotations((prev) => prev.filter((a) => a.id !== conflict.existing.id));
     } else if (resolution === "keep-existing") {
@@ -302,10 +305,26 @@ export default function App() {
     // For "keep-both", do nothing - both will remain
 
     if (remainingConflicts.length === 0) {
+      // All conflicts resolved - save the pending annotations
       setShowConflicts(false);
+      
+      const toSave = pendingAnnotations.filter((a) =>
+        conflicts.every((c) => c.newAnnotation !== a || resolution !== "keep-existing")
+      );
+      
+      if (toSave.length > 0) {
+        const { error } = await supabase.from("annotations").insert(toSave);
+        if (error) {
+          console.error(error);
+          alert("Error saving annotations: " + error.message);
+        } else {
+          await loadAnnotations();
+          alert(`Successfully saved ${toSave.length} annotation(s)!`);
+        }
+      }
+      
       setConflicts([]);
       setPendingAnnotations([]);
-      // Don't save immediately - let user click "Apply All Changes"
     } else {
       setConflicts(remainingConflicts);
     }
@@ -381,20 +400,47 @@ export default function App() {
 
     console.log('Inserting annotations:', rows);
 
-    // Update local state immediately so the PDF updates right away
-    setAnnotations(prev => {
-      // Keep saved annotations (with id) and unsaved annotations for this piece
-      const saved = prev.filter(a => a.id);
-      const unsavedForThisPiece = prev.filter(a => !a.id && a.piece_id !== currentPiece.id);
-      // Add new annotations with is_mine flag for display
-      const withOwnership = rows.map(ann => ({
-        ...ann,
-        is_mine: true
-      }));
-      return [...saved, ...unsavedForThisPiece, ...withOwnership];
-    });
-    setSaved(false);
+    // Check for conflicts before saving
+    const existingAnnotations = annotations.filter((a) => a.id);
+    const foundConflicts = detectConflicts(rows, existingAnnotations);
 
+    if (foundConflicts.length > 0) {
+      // Get creator info for conflicts
+      const conflictsWithCreators = await Promise.all(
+        foundConflicts.map(async (conflict) => {
+          const { data: creator } = await supabase
+            .from("profiles")
+            .select("name, role")
+            .eq("user_id", conflict.existing.created_by)
+            .single();
+          return { ...conflict, existingCreator: creator };
+        })
+      );
+
+      // Check if student trying to override teacher annotations
+      const isStudent = profile.role === "student";
+      const hasTeacherConflicts = conflictsWithCreators.some(
+        c => c.existingCreator?.role === "teacher"
+      );
+
+      if (isStudent && hasTeacherConflicts) {
+        alert(
+          `Cannot upload annotations: ${foundConflicts.length} annotation(s) conflict with existing teacher annotations. ` +
+          `Students cannot override teacher annotations.`
+        );
+        return;
+      }
+
+      // Teacher or student with student conflicts - show resolver
+      // Add new annotations to local state temporarily
+      setAnnotations(prev => [...prev, ...rows]);
+      setConflicts(conflictsWithCreators);
+      setPendingAnnotations(rows);
+      setShowConflicts(true);
+      return;
+    }
+
+    // No conflicts - save directly
     const { error, data } = await supabase
       .from("annotations")
       .insert(rows)
@@ -409,10 +455,6 @@ export default function App() {
         code: error.code
       });
       alert('Error saving detected annotations: ' + error.message + (error.details ? '\n' + error.details : ''));
-      // Remove from state if save failed
-      setAnnotations(prev => prev.filter(a => !rows.some(n => 
-        n.x === a.x && n.y === a.y && n.page === a.page && !a.id
-      )));
       return;
     }
 
@@ -506,6 +548,29 @@ export default function App() {
     } catch (error) {
       console.error("Error deleting piece:", error);
       alert("Failed to delete piece: " + error.message);
+    }
+  }
+
+  async function revertToVersion(timestamp) {
+    if (!window.confirm(`Are you sure you want to revert all annotations to this version? This will delete all annotations created after ${new Date(timestamp).toLocaleString()}.`)) {
+      return;
+    }
+
+    try {
+      // Delete all annotations created after this timestamp for this piece
+      const { error } = await supabase
+        .from("annotations")
+        .delete()
+        .eq("piece_id", currentPiece.id)
+        .gt("created_at", timestamp);
+
+      if (error) throw error;
+
+      await loadAnnotations();
+      alert("Successfully reverted to selected version!");
+    } catch (error) {
+      console.error("Error reverting:", error);
+      alert("Failed to revert: " + error.message);
     }
   }
 
@@ -705,19 +770,112 @@ export default function App() {
         )}
       </div>
 
-      <AnnotationCanvas
-        annotations={annotations}
-        addAnnotation={addAnnotation}
-        deleteAnnotation={deleteAnnotation}
-        user={user}
-        profile={profile}
-        currentPieceId={currentPiece}
-      />
+      {/* PDF Controls */}
+      {currentPiece?.pdf_url && (
+        <div style={{
+          marginBottom: 15,
+          padding: 15,
+          background: "white",
+          borderRadius: 8,
+          border: "2px solid var(--accent-dark)",
+          display: "flex",
+          gap: 15,
+          flexWrap: "wrap",
+          alignItems: "center"
+        }}>
+          <button
+            onClick={() => setShowDetector(true)}
+            style={{
+              padding: "10px 20px",
+              background: "#2196f3",
+              color: "white",
+              border: "none",
+              borderRadius: 5,
+              cursor: "pointer",
+              fontSize: 15,
+              fontFamily: "Gaegu, sans-serif",
+              fontWeight: 700
+            }}
+            title="Upload an annotated PDF to detect and import annotations"
+          >
+            📤 Upload Annotations
+          </button>
+          
+          <button
+            onClick={handleDownload}
+            disabled={downloading}
+            style={{
+              padding: "10px 20px",
+              background: downloading ? "#ccc" : "#4caf50",
+              color: "white",
+              border: "none",
+              borderRadius: 5,
+              cursor: downloading ? "not-allowed" : "pointer",
+              fontSize: 15,
+              fontFamily: "Gaegu, sans-serif",
+              fontWeight: 700
+            }}
+            title="Download PDF with current annotations"
+          >
+            {downloading ? "⏳ Downloading..." : "📥 Download PDF"}
+          </button>
+          
+          <button
+            onClick={() => setIsDeleteMode(!isDeleteMode)}
+            style={{
+              padding: "10px 20px",
+              background: isDeleteMode ? "#ff6b6b" : "#dc3545",
+              color: "white",
+              border: "none",
+              borderRadius: 5,
+              cursor: "pointer",
+              fontSize: 15,
+              fontFamily: "Gaegu, sans-serif",
+              fontWeight: 700
+            }}
+            title={isDeleteMode ? "Exit delete mode" : "Enter delete mode to remove annotations"}
+          >
+            {isDeleteMode ? "✓ Exit Delete Mode" : "🗑️ Delete Mode"}
+          </button>
+        </div>
+      )}
+      
+      {isDeleteMode && currentPiece?.pdf_url && (
+        <div style={{
+          marginBottom: 15,
+          padding: 15,
+          background: "#ff6b6b",
+          color: "white",
+          borderRadius: 8,
+          border: "2px solid #c92a2a",
+          fontWeight: 700,
+          textAlign: "center",
+          fontSize: 16
+        }}>
+          🗑️ DELETE MODE ACTIVE - Click any annotation to delete it
+          {profile?.role === 'student' && <span> (You can only delete your own annotations)</span>}
+        </div>
+      )}
+
+      {currentPiece?.pdf_url && (
+        <PDFViewer
+          pdfUrl={currentPiece.pdf_url}
+          annotations={annotations.filter(a => a.piece_id === currentPiece.id)}
+          addAnnotation={addAnnotation}
+          deleteAnnotation={deleteAnnotation}
+          user={user}
+          profile={profile}
+          currentPiece={currentPiece}
+          isDeleteMode={isDeleteMode}
+        />
+      )}
+      
       <div style={{ 
         display: "flex", 
         gap: 15,
         flexWrap: "wrap",
-        alignItems: "center"
+        alignItems: "center",
+        marginTop: 20
       }}>
         <button
           onClick={undo}
@@ -729,6 +887,9 @@ export default function App() {
             fontSize: 16,
             cursor: historyIndex > 0 ? "pointer" : "not-allowed",
             opacity: historyIndex > 0 ? 1 : 0.6,
+            border: "none",
+            borderRadius: 5,
+            fontFamily: "Gaegu, sans-serif",
           }}
           title="Undo last change"
         >
@@ -744,26 +905,14 @@ export default function App() {
             fontSize: 16,
             cursor: historyIndex < history.length - 1 ? "pointer" : "not-allowed",
             opacity: historyIndex < history.length - 1 ? 1 : 0.6,
+            border: "none",
+            borderRadius: 5,
+            fontFamily: "Gaegu, sans-serif",
           }}
           title="Redo last undone change"
         >
           ↷ Redo
         </button>
-        <button
-          onClick={saveAnnotations}
-          disabled={totalChanges === 0}
-          style={{
-            padding: "12px 25px",
-            background: saved ? "var(--secondary)" : (totalChanges > 0 ? "var(--accent-dark)" : "#ccc"),
-            color: saved ? "var(--accent-dark)" : (totalChanges > 0 ? "white" : "#666"),
-            fontSize: 16,
-            cursor: totalChanges > 0 ? "pointer" : "not-allowed",
-            fontWeight: 700
-          }}
-        >
-          {saved ? "✓ Changes Saved!" : `Apply All Changes (${getChangesText()})`}
-        </button>
-        
         <button
           onClick={() => setShowHistory(!showHistory)}
           style={{
@@ -782,7 +931,13 @@ export default function App() {
         </button>
       </div>
 
-      {showHistory && <VersionHistory currentPieceId={currentPiece?.id} />}
+      {showHistory && (
+        <VersionHistory 
+          currentPieceId={currentPiece?.id} 
+          onRevert={revertToVersion}
+          userRole={profile?.role}
+        />
+      )}
       
       {showDetector && (
         <AnnotationDetector
