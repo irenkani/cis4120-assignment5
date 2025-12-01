@@ -18,10 +18,15 @@ export default function App() {
   const [conflicts, setConflicts] = useState([]);
   const [showConflicts, setShowConflicts] = useState(false);
   const [pendingAnnotations, setPendingAnnotations] = useState([]);
-  const [downloading, setDownloading] = useState(false);
-  const [pieces, setPieces] = useState([]);
-  const [showPieceManager, setShowPieceManager] = useState(false);
-  const [uploadingPiece, setUploadingPiece] = useState(false);
+  const [pendingDeletions, setPendingDeletions] = useState([]);
+  const [history, setHistory] = useState([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const [currentPiece, setCurrentPiece] = useState("symphony-1");
+  const [pieces, setPieces] = useState([
+    { id: "symphony-1", name: "Symphony No. 1" },
+    { id: "symphony-2", name: "Symphony No. 2" },
+    { id: "canon-in-d", name: "Canon in D" },
+  ]);
 
   useEffect(() => {
     checkUser();
@@ -114,38 +119,83 @@ export default function App() {
   }
 
   async function loadAnnotations() {
-    if (!currentPiece) return;
-    
-    const { data, error } = await supabase
-      .from("annotations")
-      .select("*")
-      .eq("piece_id", currentPiece.id);
-    
-    if (error) {
-      console.error(error);
-    } else {
-      const annotationsWithOwnership = (data || []).map(ann => ({
-        ...ann,
-        is_mine: ann.created_by === user.id
-      }));
-      // Merge with unsaved annotations (ones without id) to preserve newly added ones
-      setAnnotations(prev => {
-        const unsaved = prev.filter(a => !a.id && a.piece_id === currentPiece.id);
-        return [...annotationsWithOwnership, ...unsaved];
-      });
+    const { data, error } = await supabase.from("annotations").select("*");
+    if (error) console.error(error);
+    else {
+      setAnnotations(data || []);
+      // Initialize history with current state when loading
+      setHistory([{ annotations: data || [], deletions: [] }]);
+      setHistoryIndex(0);
+      setPendingDeletions([]);
     }
   }
 
+  const saveToHistory = (newAnnotations, newDeletions) => {
+    // Clear any future history if we're not at the end
+    const newHistory = history.slice(0, historyIndex + 1);
+    newHistory.push({
+      annotations: newAnnotations,
+      deletions: newDeletions,
+    });
+    setHistory(newHistory);
+    setHistoryIndex(newHistory.length - 1);
+  };
+
   const addAnnotation = (a) => {
-    const newAnnotation = {
-      ...a,
-      created_by: user.id,
-      piece_id: currentPiece.id,
-      version: 1,
-      is_mine: true
-    };
-    setAnnotations(prev => [...prev, newAnnotation]);
+    const newAnnotation = { ...a, created_by: user.id, version: 1 };
+    const newAnnotations = [...annotations, newAnnotation];
+    
+    setAnnotations(newAnnotations);
+    saveToHistory(newAnnotations, pendingDeletions);
     setSaved(false);
+  };
+
+  const deleteAnnotation = (annotation) => {
+    // Permission check: students can only delete their own, teachers can delete any
+    const isMine = annotation.created_by === user.id;
+    const isTeacher = profile?.role === "teacher";
+    
+    if (!isTeacher && !isMine) {
+      alert("You can only delete your own annotations.");
+      return;
+    }
+    
+    // If annotation has an id, it's saved in database - mark for deletion
+    if (annotation.id) {
+      setPendingDeletions((prev) => [...prev, annotation]);
+      // Visually remove from annotations list
+      setAnnotations((prev) => prev.filter((a) => a.id !== annotation.id));
+      saveToHistory(
+        annotations.filter((a) => a.id !== annotation.id),
+        [...pendingDeletions, annotation]
+      );
+    } else {
+      // If no id, it's a local unsaved annotation - just remove from state
+      const newAnnotations = annotations.filter((a) => a !== annotation);
+      setAnnotations(newAnnotations);
+      saveToHistory(newAnnotations, pendingDeletions);
+    }
+    setSaved(false);
+  };
+
+  const undo = () => {
+    if (historyIndex > 0) {
+      const prevState = history[historyIndex - 1];
+      setAnnotations(prevState.annotations);
+      setPendingDeletions(prevState.deletions);
+      setHistoryIndex(historyIndex - 1);
+      setSaved(false);
+    }
+  };
+
+  const redo = () => {
+    if (historyIndex < history.length - 1) {
+      const nextState = history[historyIndex + 1];
+      setAnnotations(nextState.annotations);
+      setPendingDeletions(nextState.deletions);
+      setHistoryIndex(historyIndex + 1);
+      setSaved(false);
+    }
   };
 
   function detectConflicts(newAnnotations, existingAnnotations) {
@@ -172,13 +222,14 @@ export default function App() {
   }
 
   async function saveAnnotations() {
-    const newOnes = annotations.filter((a) => !a.id && a.piece_id === currentPiece?.id);
-    console.log('Saving annotations:', { total: annotations.length, newOnes: newOnes.length, newOnes });
-    if (newOnes.length === 0) {
-      alert("No new annotations to save!");
-      return;
+    const newOnes = annotations.filter((a) => !a.id);
+    const toDelete = pendingDeletions;
+    
+    if (newOnes.length === 0 && toDelete.length === 0) {
+      return alert("No changes to save!");
     }
 
+    // Check for conflicts with new annotations
     const existingOnes = annotations.filter((a) => a.id);
     const foundConflicts = detectConflicts(newOnes, existingOnes);
 
@@ -199,31 +250,37 @@ export default function App() {
       return;
     }
 
-    // Save to database - remove client-only fields before saving
-    const annotationsToSave = newOnes.map(({ is_mine, ...rest }) => {
-      // Ensure all required fields are present
-      return {
-        ...rest,
-        piece_id: currentPiece.id,
-        page: rest.page || 1,
-        version: rest.version || 1,
-        color: rest.color || null
-      };
-    });
-    
-    console.log('Inserting annotations:', annotationsToSave);
-    const { error, data } = await supabase.from("annotations").insert(annotationsToSave).select();
-    
-    if (error) {
-      console.error('Error saving annotations:', error);
-      alert("Error saving annotations: " + error.message);
-    } else {
-      console.log('Successfully saved annotations:', data);
-      setSaved(true);
-      // Reload annotations to get the IDs
-      await loadAnnotations();
-      setTimeout(() => setSaved(false), 2000);
+    // Process deletions first
+    if (toDelete.length > 0) {
+      const deletePromises = toDelete.map((annotation) =>
+        supabase.from("annotations").delete().eq("id", annotation.id)
+      );
+      const deleteResults = await Promise.all(deletePromises);
+      const deleteErrors = deleteResults.filter((r) => r.error);
+      if (deleteErrors.length > 0) {
+        console.error("Delete errors:", deleteErrors);
+        alert("Some deletions failed. Check console.");
+        return;
+      }
     }
+
+    // Then insert new annotations
+    if (newOnes.length > 0) {
+      const { error } = await supabase.from("annotations").insert(newOnes);
+      if (error) {
+        console.error(error);
+        alert("Error saving annotations: " + error.message);
+        return;
+      }
+    }
+
+    // Clear pending changes and reload
+    setPendingDeletions([]);
+    setHistory([]);
+    setHistoryIndex(-1);
+    setSaved(true);
+    await loadAnnotations();
+    setTimeout(() => setSaved(false), 2000);
   }
 
   async function handleConflictResolve(conflictIndex, resolution) {
@@ -231,37 +288,24 @@ export default function App() {
     const remainingConflicts = conflicts.filter((_, i) => i !== conflictIndex);
 
     if (resolution === "keep-new") {
-      await supabase
-        .from("annotations")
-        .delete()
-        .eq("id", conflict.existing.id);
+      // Mark existing annotation for deletion
+      setPendingDeletions((prev) => [...prev, conflict.existing]);
+      // Remove from visible annotations
+      setAnnotations((prev) => prev.filter((a) => a.id !== conflict.existing.id));
     } else if (resolution === "keep-existing") {
+      // Remove the new annotation from the list
       setPendingAnnotations((prev) =>
         prev.filter((a) => a !== conflict.newAnnotation)
       );
+      setAnnotations((prev) => prev.filter((a) => a !== conflict.newAnnotation));
     }
+    // For "keep-both", do nothing - both will remain
 
     if (remainingConflicts.length === 0) {
       setShowConflicts(false);
-      const toSave = pendingAnnotations.filter((a) =>
-        conflicts.every((c) => c.newAnnotation !== a || resolution !== "keep-existing")
-      );
-      
-      if (toSave.length > 0) {
-        const { error } = await supabase.from("annotations").insert(
-          toSave.map(({ is_mine, ...rest }) => rest)
-        );
-        if (error) {
-          console.error(error);
-          alert("Error saving annotations: " + error.message);
-        } else {
-          setSaved(true);
-          await loadAnnotations();
-          setTimeout(() => setSaved(false), 2000);
-        }
-      }
       setConflicts([]);
       setPendingAnnotations([]);
+      // Don't save immediately - let user click "Apply All Changes"
     } else {
       setConflicts(remainingConflicts);
     }
@@ -478,7 +522,18 @@ export default function App() {
     return <Login onLogin={checkUser} />;
   }
 
-  const newAnnotationsCount = annotations.filter(a => !a.id).length;
+  const currentPieceAnnotations = annotations.filter(a => !a.piece_id || a.piece_id === currentPiece);
+  const newAnnotationsCount = currentPieceAnnotations.filter(a => !a.id).length;
+  const deletionsCount = pendingDeletions.length;
+  const totalChanges = newAnnotationsCount + deletionsCount;
+
+  const getChangesText = () => {
+    if (totalChanges === 0) return "No Changes";
+    const parts = [];
+    if (newAnnotationsCount > 0) parts.push(`${newAnnotationsCount} addition${newAnnotationsCount !== 1 ? 's' : ''}`);
+    if (deletionsCount > 0) parts.push(`${deletionsCount} deletion${deletionsCount !== 1 ? 's' : ''}`);
+    return parts.join(', ');
+  };
 
   return (
     <div style={{ padding: 20, fontFamily: "Gaegu, sans-serif", background: "#faf8f3", minHeight: "100vh" }}>
@@ -650,87 +705,63 @@ export default function App() {
         )}
       </div>
 
-      {/* Action Buttons */}
+      <AnnotationCanvas
+        annotations={annotations}
+        addAnnotation={addAnnotation}
+        deleteAnnotation={deleteAnnotation}
+        user={user}
+        profile={profile}
+        currentPieceId={currentPiece}
+      />
       <div style={{ 
         display: "flex", 
-        gap: 15, 
-        marginBottom: 20,
-        padding: 15,
-        background: "#fff3e0",
-        borderRadius: 8
+        gap: 15,
+        flexWrap: "wrap",
+        alignItems: "center"
       }}>
         <button
-          onClick={handleDownload}
-          disabled={downloading}
+          onClick={undo}
+          disabled={historyIndex <= 0}
           style={{
-            flex: 1,
-            padding: "12px 20px",
-            background: downloading ? "#ccc" : "#90EE90",
-            color: "black",
-            border: "2px solid #4caf50",
-            borderRadius: 5,
-            cursor: downloading ? 'wait' : 'pointer',
-            fontFamily: "Gaegu, sans-serif",
+            padding: "10px 20px",
+            background: historyIndex > 0 ? "var(--accent-mint)" : "#ccc",
+            color: "var(--accent-dark)",
             fontSize: 16,
-            fontWeight: "bold"
+            cursor: historyIndex > 0 ? "pointer" : "not-allowed",
+            opacity: historyIndex > 0 ? 1 : 0.6,
           }}
+          title="Undo last change"
         >
-          {downloading ? "⏳ Downloading..." : "📥 Download with Annotations"}
+          ↶ Undo
         </button>
-
         <button
-          onClick={() => setShowDetector(true)}
+          onClick={redo}
+          disabled={historyIndex >= history.length - 1}
           style={{
-            flex: 1,
-            padding: "12px 20px",
-            background: "#90EE90",
-            color: "black",
-            border: "2px solid #4caf50",
-            borderRadius: 5,
-            cursor: "pointer",
-            fontFamily: "Gaegu, sans-serif",
+            padding: "10px 20px",
+            background: historyIndex < history.length - 1 ? "var(--accent-mint)" : "#ccc",
+            color: "var(--accent-dark)",
             fontSize: 16,
-            fontWeight: "bold"
+            cursor: historyIndex < history.length - 1 ? "pointer" : "not-allowed",
+            opacity: historyIndex < history.length - 1 ? 1 : 0.6,
           }}
+          title="Redo last undone change"
         >
-          📤 Upload Annotated PDF
+          ↷ Redo
         </button>
-      </div>
-
-      {/* PDF Viewer */}
-      {currentPiece?.pdf_url && (
-        <div style={{ 
-          background: "white", 
-          padding: 20, 
-          borderRadius: 8,
-          marginBottom: 20
-        }}>
-          <PDFViewer
-            pdfUrl={currentPiece.pdf_url}
-            annotations={annotations}
-            onAnnotationAdd={addAnnotation}
-            user={user}
-          />
-        </div>
-      )}
-
-      {/* Save Button */}
-      <div style={{ marginTop: 20, display: "flex", gap: 10 }}>
         <button
           onClick={saveAnnotations}
+          disabled={totalChanges === 0}
           style={{
             padding: "12px 25px",
-            background: saved ? "#4caf50" : "#007bff",
-            color: "white",
-            border: "none",
-            borderRadius: 5,
-            cursor: "pointer",
-            fontWeight: "bold",
+            background: saved ? "var(--secondary)" : (totalChanges > 0 ? "var(--accent-dark)" : "#ccc"),
+            color: saved ? "var(--accent-dark)" : (totalChanges > 0 ? "white" : "#666"),
             fontSize: 16,
-            fontFamily: "Gaegu, sans-serif",
+            cursor: totalChanges > 0 ? "pointer" : "not-allowed",
+            fontWeight: 700
           }}
         >
-          {saved ? "✓ Changes Saved!" : `💾 Save Changes (${newAnnotationsCount} new)`}
+          {saved ? "✓ Changes Saved!" : `Apply All Changes (${getChangesText()})`}
         </button>
         
         <button
@@ -768,10 +799,15 @@ export default function App() {
           conflicts={conflicts}
           onResolve={handleConflictResolve}
           onClose={() => {
+            // When closing conflict resolver, remove the conflicting new annotations
+            // but keep the existing ones
+            const conflictingNewAnnotations = conflicts.map(c => c.newAnnotation);
+            setAnnotations(prev => prev.filter(a => !conflictingNewAnnotations.includes(a)));
             setShowConflicts(false);
             setConflicts([]);
             setPendingAnnotations([]);
           }}
+          currentUserProfile={profile}
         />
       )}
     </div>
