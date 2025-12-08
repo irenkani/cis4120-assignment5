@@ -5,7 +5,16 @@ import { supabase } from './supabaseClient';
 // Set worker path - use local file (most reliable)
 pdfjsLib.GlobalWorkerOptions.workerSrc = `${process.env.PUBLIC_URL || ''}/pdf.worker.min.mjs`;
 
-export default function PDFViewer({ pdfUrl, annotations = [], onAnnotationAdd, user }) {
+export default function PDFViewer({ 
+  pdfUrl, 
+  annotations = [], 
+  addAnnotation, 
+  deleteAnnotation, 
+  user, 
+  profile, 
+  currentPiece,
+  isDeleteMode 
+}) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const renderTaskRef = useRef(null);
@@ -15,6 +24,7 @@ export default function PDFViewer({ pdfUrl, annotations = [], onAnnotationAdd, u
   const [scale, setScale] = useState(1.5);
   const [loading, setLoading] = useState(true);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
+  const [pendingDeletes, setPendingDeletes] = useState([]);
 
   useEffect(() => {
     if (pdfUrl) {
@@ -119,19 +129,64 @@ export default function PDFViewer({ pdfUrl, annotations = [], onAnnotationAdd, u
   }
 
   function handleCanvasClick(e) {
-    if (!onAnnotationAdd) return;
+    // Don't add annotations in delete mode
+    if (isDeleteMode || !addAnnotation) return;
     
     const rect = canvasRef.current.getBoundingClientRect();
     const x = (e.clientX - rect.left) / scale;
     const y = (e.clientY - rect.top) / scale;
     
-    onAnnotationAdd({
+    addAnnotation({
       x,
       y,
       page: currentPage,
       type: 'dot',
       color: 'red'
     });
+  }
+
+  function handleAnnotationClick(annotation, e) {
+    e.stopPropagation();
+    
+    // Only allow deletion in delete mode
+    if (!isDeleteMode) return;
+    
+    const isMine = annotation.created_by === user?.id;
+    const isTeacher = profile?.role === "teacher";
+    
+    // Check permissions
+    if (!isTeacher && !isMine) {
+      alert("You can only delete your own annotations.");
+      return;
+    }
+    
+    // Mark for deletion (toggle)
+    if (pendingDeletes.find(a => a.id === annotation.id)) {
+      setPendingDeletes(prev => prev.filter(a => a.id !== annotation.id));
+    } else {
+      setPendingDeletes(prev => [...prev, annotation]);
+    }
+  }
+
+  function handleSaveChanges() {
+    if (pendingDeletes.length === 0) {
+      alert("No changes to save.");
+      return;
+    }
+    
+    // Delete all pending annotations
+    pendingDeletes.forEach(ann => {
+      if (deleteAnnotation) {
+        deleteAnnotation(ann);
+      }
+    });
+    
+    setPendingDeletes([]);
+    alert(`Deleted ${pendingDeletes.length} annotation(s)!`);
+  }
+
+  function handleCancelChanges() {
+    setPendingDeletes([]);
   }
 
   if (loading) {
@@ -224,6 +279,74 @@ export default function PDFViewer({ pdfUrl, annotations = [], onAnnotationAdd, u
         </button>
       </div>
       
+      {/* Delete Mode Controls */}
+      {isDeleteMode && pendingDeletes.length > 0 && (
+        <div style={{
+          marginBottom: 15,
+          padding: 15,
+          background: '#fff3cd',
+          border: '2px solid #ffc107',
+          borderRadius: 5,
+          display: 'inline-block',
+          textAlign: 'left'
+        }}>
+          <div style={{ marginBottom: 10, fontWeight: 'bold', fontSize: 16 }}>
+            📋 Pending Deletions: {pendingDeletes.length}
+          </div>
+          <div style={{ marginBottom: 10, fontSize: 14, color: '#666' }}>
+            Click annotations to select/deselect for deletion. Selected annotations are highlighted in red.
+          </div>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+            <button
+              onClick={handleSaveChanges}
+              style={{
+                padding: '10px 20px',
+                background: '#dc3545',
+                color: 'white',
+                border: 'none',
+                borderRadius: 5,
+                cursor: 'pointer',
+                fontWeight: 'bold',
+                fontSize: 16
+              }}
+            >
+              🗑️ Delete {pendingDeletes.length} Annotation{pendingDeletes.length !== 1 ? 's' : ''}
+            </button>
+            <button
+              onClick={handleCancelChanges}
+              style={{
+                padding: '10px 20px',
+                background: '#6c757d',
+                color: 'white',
+                border: 'none',
+                borderRadius: 5,
+                cursor: 'pointer',
+                fontSize: 16
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      
+      {/* Delete Mode Instructions */}
+      {isDeleteMode && pendingDeletes.length === 0 && (
+        <div style={{
+          marginBottom: 15,
+          padding: 15,
+          background: '#d1ecf1',
+          border: '2px solid #0c5460',
+          borderRadius: 5,
+          display: 'inline-block',
+          fontSize: 14,
+          color: '#0c5460'
+        }}>
+          💡 <strong>Delete Mode Active:</strong> Click on annotations below to select them for deletion.
+          {profile?.role !== 'teacher' && <span> (You can only delete your own annotations)</span>}
+        </div>
+      )}
+      
       {/* PDF Canvas with Annotation Layers */}
       <div ref={containerRef} style={{ position: 'relative', display: 'inline-block' }}>
         {/* Base PDF */}
@@ -242,7 +365,17 @@ export default function PDFViewer({ pdfUrl, annotations = [], onAnnotationAdd, u
         {/* Annotation Layers Overlay */}
         {pageAnnotations.map((ann, i) => {
           const isMine = ann.created_by === user?.id;
+          const isTeacher = profile?.role === "teacher";
+          const canDelete = isTeacher || isMine;
+          const isPendingDelete = pendingDeletes.find(a => 
+            (a.id && ann.id && a.id === ann.id) || 
+            (a.x === ann.x && a.y === ann.y && a.page === ann.page)
+          );
           const borderColor = isMine ? 'rgba(0, 0, 255, 0.3)' : 'rgba(255, 165, 0, 0.3)';
+          
+          // Determine pointer events and cursor
+          const pointerEvents = isDeleteMode ? 'auto' : 'none';
+          const cursor = isDeleteMode ? (canDelete ? 'pointer' : 'not-allowed') : 'default';
           
           // Individual sticker/image annotation (includes auto-detected regions)
           if (ann.type === 'sticker' && ann.sticker_url) {
@@ -261,21 +394,35 @@ export default function PDFViewer({ pdfUrl, annotations = [], onAnnotationAdd, u
             const viewportHeight = ann.height ? ann.height * scale : 50;
             
             return (
-              <img
+              <div
                 key={ann.id || i}
-                src={src}
-                alt="annotation"
+                onClick={(e) => handleAnnotationClick(ann, e)}
                 style={{
                   position: 'absolute',
                   left: `${viewportX}px`,
                   top: `${viewportY}px`,
                   width: `${viewportWidth}px`,
                   height: `${viewportHeight}px`,
-                  pointerEvents: 'none',
-                  zIndex: 10
+                  pointerEvents,
+                  cursor,
+                  zIndex: 10,
+                  border: isPendingDelete ? '3px solid red' : (isDeleteMode && canDelete ? '2px solid yellow' : 'none'),
+                  boxShadow: isPendingDelete ? '0 0 10px red' : 'none',
+                  opacity: isPendingDelete ? 0.5 : 1
                 }}
-                onError={() => console.error('Failed to load annotation image:', src)}
-              />
+                title={isDeleteMode ? (canDelete ? 'Click to delete' : 'Cannot delete') : ''}
+              >
+                <img
+                  src={src}
+                  alt="annotation"
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    display: 'block'
+                  }}
+                  onError={() => console.error('Failed to load annotation image:', src)}
+                />
+              </div>
             );
           }
           
@@ -283,19 +430,31 @@ export default function PDFViewer({ pdfUrl, annotations = [], onAnnotationAdd, u
           else if (ann.type === 'dot') {
             return (
               <div
-                key={i}
+                key={ann.id || i}
+                onClick={(e) => handleAnnotationClick(ann, e)}
                 style={{
                   position: 'absolute',
-                  left: ann.x * scale - 7,
-                  top: ann.y * scale - 7,
-                  width: 14,
-                  height: 14,
+                  left: ann.x * scale - 10,
+                  top: ann.y * scale - 10,
+                  width: 20,
+                  height: 20,
                   borderRadius: '50%',
                   background: ann.color || 'red',
-                  border: `3px solid ${isMine ? 'blue' : 'orange'}`,
-                  boxShadow: '0 0 5px rgba(0,0,0,0.5)',
-                  pointerEvents: 'none'
+                  border: isPendingDelete 
+                    ? '4px solid red' 
+                    : (isDeleteMode && canDelete 
+                      ? '3px solid yellow' 
+                      : `3px solid ${isMine ? 'blue' : 'orange'}`),
+                  boxShadow: isPendingDelete 
+                    ? '0 0 10px red' 
+                    : '0 0 5px rgba(0,0,0,0.5)',
+                  pointerEvents,
+                  cursor,
+                  opacity: isPendingDelete ? 0.5 : 1,
+                  zIndex: 10,
+                  transition: 'all 0.2s'
                 }}
+                title={isDeleteMode ? (canDelete ? 'Click to delete' : 'Cannot delete') : ''}
               />
             );
           }

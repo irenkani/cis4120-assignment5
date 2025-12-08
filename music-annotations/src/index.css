@@ -61,3 +61,85 @@ label {
   font-weight: 700;
   color: var(--accent-dark);
 }
+
+/* iPad & Touch Device Optimizations */
+@media (hover: none) and (pointer: coarse) {
+  /* Increase touch targets for better interaction */
+  button {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 12px 20px;
+    font-size: 18px;
+  }
+  
+  input, select, textarea {
+    min-height: 44px;
+    font-size: 16px;
+    padding: 12px;
+  }
+  
+  /* Better spacing for touch */
+  button + button {
+    margin-left: 12px;
+  }
+}
+
+/* iPad Specific (Portrait and Landscape) */
+@media only screen 
+  and (min-device-width: 768px) 
+  and (max-device-width: 1024px) {
+  
+  body {
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  
+  /* Larger fonts for readability */
+  h1 {
+    font-size: 32px;
+  }
+  
+  h2 {
+    font-size: 28px;
+  }
+  
+  h3 {
+    font-size: 24px;
+  }
+  
+  /* Better button sizing */
+  button {
+    font-size: 18px;
+    padding: 14px 24px;
+  }
+}
+
+/* iPad Pro 12.9" */
+@media only screen 
+  and (min-device-width: 1024px) 
+  and (max-device-width: 1366px) {
+  
+  button {
+    font-size: 20px;
+    padding: 16px 28px;
+  }
+}
+
+/* Prevent text selection on double-tap */
+* {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+}
+
+/* But allow text selection in inputs and content areas */
+input, textarea, [contenteditable] {
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  user-select: text;
+}
+
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+}

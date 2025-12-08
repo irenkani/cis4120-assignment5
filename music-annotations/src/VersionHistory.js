@@ -245,20 +245,22 @@ export default function VersionHistory({ currentPieceId, onRevert, userRole }) {
                           <button
                             onClick={() => onRevert(commit.timestamp)}
                             style={{
-                              padding: "10px 20px",
+                              padding: "14px 24px",
                               background: "#dc3545",
                               color: "white",
                               border: "none",
-                              borderRadius: 5,
+                              borderRadius: 8,
                               cursor: "pointer",
-                              fontSize: 14,
+                              fontSize: "18px",
                               fontWeight: 700,
-                              fontFamily: "Gaegu, sans-serif"
+                              fontFamily: "Gaegu, sans-serif",
+                              minHeight: "50px",
+                              touchAction: "manipulation"
                             }}
                           >
                             ⏪ Revert to This Version
                           </button>
-                          <p style={{ marginTop: 8, fontSize: 12, color: "#666", fontStyle: "italic" }}>
+                          <p style={{ marginTop: 10, fontSize: "16px", color: "#666", fontStyle: "italic" }}>
                             This will delete all annotations created after this version.
                           </p>
                         </div>

@@ -5,6 +5,7 @@ import PDFViewer from "./PDFViewer";
 import AnnotationDetector from "./AnnotationDetector";
 import { downloadPDFWithAnnotations } from "./PDFDownloader";
 import Login from "./Login";
+import HomePage from "./HomePage";
 import VersionHistory from "./VersionHistory";
 import ConflictResolver from "./ConflictResolver";
 
@@ -13,6 +14,8 @@ export default function App() {
   const [profile, setProfile] = useState(null);
   const [annotations, setAnnotations] = useState([]);
   const [currentPiece, setCurrentPiece] = useState(null);
+  const [userRoleInPiece, setUserRoleInPiece] = useState(null);
+  const [currentView, setCurrentView] = useState("home"); // "home" or "piece"
   const [saved, setSaved] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showDetector, setShowDetector] = useState(false);
@@ -46,11 +49,7 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
-    if (user) {
-      loadPieces();
-    }
-  }, [user]);
+  // Removed loadPieces useEffect - pieces are now loaded in HomePage
 
   useEffect(() => {
     if (user && currentPiece) {
@@ -66,22 +65,7 @@ export default function App() {
     }
   }
 
-  async function loadPieces() {
-    const { data, error } = await supabase
-      .from("pieces")
-      .select("*")
-      .order("name", { ascending: true });
-    
-    if (error) {
-      console.error("Error loading pieces:", error);
-    } else {
-      setPieces(data || []);
-      // Set default piece if none selected
-      if (!currentPiece && data && data.length > 0) {
-        setCurrentPiece(data[0]);
-      }
-    }
-  }
+  // Removed loadPieces - pieces are now loaded per user in HomePage via piece_members table
 
   async function loadProfile(userId) {
     const { data, error } = await supabase
@@ -94,13 +78,14 @@ export default function App() {
       setProfile(data);
     } else if (error) {
       // Profile doesn't exist, create it
+      // Note: role is now per-piece (in piece_members table), not global
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         const newProfile = {
           user_id: userId,
           email: user.email,
           name: user.user_metadata?.name || user.email?.split('@')[0] || 'User',
-          role: user.user_metadata?.role || 'student',
+          // No role field - roles are now in piece_members table
         };
         
         const { data: created, error: insertError } = await supabase
@@ -119,9 +104,16 @@ export default function App() {
   }
 
   async function loadAnnotations() {
-    const { data, error } = await supabase.from("annotations").select("*");
-    if (error) console.error(error);
-    else {
+    if (!currentPiece) return;
+    
+    const { data, error } = await supabase
+      .from("annotations")
+      .select("*")
+      .eq("piece_id", currentPiece.id);
+    
+    if (error) {
+      console.error("Error loading annotations:", error);
+    } else {
       setAnnotations(data || []);
       // Initialize history with current state when loading
       setHistory([{ annotations: data || [], deletions: [] }]);
@@ -151,11 +143,11 @@ export default function App() {
   };
 
   const deleteAnnotation = (annotation) => {
-    // Permission check: students can only delete their own, teachers can delete any
+    // Permission check: students can only delete their own, teachers (in this piece) can delete any
     const isMine = annotation.created_by === user.id;
-    const isTeacher = profile?.role === "teacher";
+    const isTeacherInPiece = userRoleInPiece === "teacher";
     
-    if (!isTeacher && !isMine) {
+    if (!isTeacherInPiece && !isMine) {
       alert("You can only delete your own annotations.");
       return;
     }
@@ -369,20 +361,21 @@ export default function App() {
       return;
     }
 
-    // Verify user has a profile with correct role (required by RLS policy)
+    // Verify user has a profile
     if (!profile) {
       alert('User profile not found. Please ensure your profile exists in the database.');
       console.error('Profile missing for user:', user.id);
       return;
     }
 
-    if (!profile.role || !['student', 'teacher'].includes(profile.role)) {
-      alert(`User role '${profile.role || 'none'}' is not allowed. Must be 'student' or 'teacher'.`);
-      console.error('Invalid user role:', profile.role);
+    // Verify user has a role in this piece
+    if (!userRoleInPiece || !['student', 'teacher'].includes(userRoleInPiece)) {
+      alert(`You don't have permission to annotate this piece. Please join the piece first.`);
+      console.error('Invalid or missing role in piece:', userRoleInPiece);
       return;
     }
 
-    console.log('Current user:', { id: user.id, email: user.email, role: profile.role });
+    console.log('Current user:', { id: user.id, email: user.email, roleInPiece: userRoleInPiece });
 
     // Map annotations to database rows - sticker_url is now a path, not a URL
     const rows = detectedAnnotations.map(a => ({
@@ -405,25 +398,41 @@ export default function App() {
     const foundConflicts = detectConflicts(rows, existingAnnotations);
 
     if (foundConflicts.length > 0) {
-      // Get creator info for conflicts
+      // Get creator info with their role IN THIS PIECE
       const conflictsWithCreators = await Promise.all(
         foundConflicts.map(async (conflict) => {
-          const { data: creator } = await supabase
+          // Get profile name
+          const { data: creatorProfile } = await supabase
             .from("profiles")
-            .select("name, role")
+            .select("name")
             .eq("user_id", conflict.existing.created_by)
             .single();
-          return { ...conflict, existingCreator: creator };
+          
+          // Get role in this piece
+          const { data: creatorRole } = await supabase
+            .from("piece_members")
+            .select("role")
+            .eq("piece_id", currentPiece.id)
+            .eq("user_id", conflict.existing.created_by)
+            .single();
+          
+          return { 
+            ...conflict, 
+            existingCreator: {
+              name: creatorProfile?.name || "Unknown",
+              role: creatorRole?.role || "student"
+            }
+          };
         })
       );
 
-      // Check if student trying to override teacher annotations
-      const isStudent = profile.role === "student";
+      // Check if student trying to override teacher annotations (in this piece)
+      const isStudentInPiece = userRoleInPiece === "student";
       const hasTeacherConflicts = conflictsWithCreators.some(
         c => c.existingCreator?.role === "teacher"
       );
 
-      if (isStudent && hasTeacherConflicts) {
+      if (isStudentInPiece && hasTeacherConflicts) {
         alert(
           `Cannot upload annotations: ${foundConflicts.length} annotation(s) conflict with existing teacher annotations. ` +
           `Students cannot override teacher annotations.`
@@ -513,7 +522,7 @@ export default function App() {
       }
 
       alert("Piece uploaded successfully!");
-      await loadPieces();
+      // Note: Piece upload should now be done via HomePage
       e.target.value = ''; // Reset file input
     } catch (error) {
       console.error("Error uploading piece:", error);
@@ -537,13 +546,12 @@ export default function App() {
 
       if (error) throw error;
 
-      // If deleted piece was current, switch to first available
+      // If deleted piece was current, return to home
       if (currentPiece?.id === pieceId) {
-        const remaining = pieces.filter(p => p.id !== pieceId);
-        setCurrentPiece(remaining.length > 0 ? remaining[0] : null);
+        handleBackToHome();
       }
 
-      await loadPieces();
+      // Note: Piece deletion should now be done via HomePage
       alert("Piece deleted successfully!");
     } catch (error) {
       console.error("Error deleting piece:", error);
@@ -574,6 +582,23 @@ export default function App() {
     }
   }
 
+  async function handleSelectPiece(piece, role) {
+    setCurrentPiece(piece);
+    setUserRoleInPiece(role);
+    setCurrentView("piece");
+    await loadAnnotations();
+  }
+
+  function handleBackToHome() {
+    setCurrentPiece(null);
+    setUserRoleInPiece(null);
+    setCurrentView("home");
+    setAnnotations([]);
+    setShowHistory(false);
+    setShowDetector(false);
+    setIsDeleteMode(false);
+  }
+
   async function logout() {
     await supabase.auth.signOut();
     setUser(null);
@@ -581,10 +606,24 @@ export default function App() {
     setAnnotations([]);
     setPieces([]);
     setCurrentPiece(null);
+    setUserRoleInPiece(null);
+    setCurrentView("home");
   }
 
   if (!user) {
     return <Login onLogin={checkUser} />;
+  }
+
+  // Show home page if no piece is selected
+  if (currentView === "home") {
+    return (
+      <HomePage
+        user={user}
+        profile={profile}
+        onSelectPiece={handleSelectPiece}
+        onLogout={logout}
+      />
+    );
   }
 
   const currentPieceAnnotations = annotations.filter(a => !a.piece_id || a.piece_id === currentPiece);
@@ -601,33 +640,114 @@ export default function App() {
   };
 
   return (
-    <div style={{ padding: 20, fontFamily: "Gaegu, sans-serif", background: "#faf8f3", minHeight: "100vh" }}>
+    <div style={{ 
+      padding: "max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left))", 
+      fontFamily: "Gaegu, sans-serif", 
+      background: "#faf8f3", 
+      minHeight: "100vh",
+      maxWidth: "100%",
+      overflowX: "hidden"
+    }}>
       {/* Header */}
       <div style={{ 
         display: "flex", 
         justifyContent: "space-between", 
         alignItems: "center", 
         marginBottom: 20,
-        padding: 15,
+        padding: "15px 20px",
         background: "#d4f1d4",
-        borderRadius: 8
+        borderRadius: 8,
+        flexWrap: "wrap",
+        gap: "15px"
       }}>
-        <h1 style={{ margin: 0 }}>🎵 ScoreHub</h1>
-        <div style={{ display: "flex", alignItems: "center", gap: 15 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 15, flexWrap: "wrap" }}>
+          <button
+            onClick={handleBackToHome}
+            style={{
+              padding: "10px 16px",
+              background: "var(--accent-dark)",
+              color: "white",
+              border: "none",
+              borderRadius: 8,
+              cursor: "pointer",
+              fontSize: "18px",
+              minHeight: "44px",
+              touchAction: "manipulation"
+            }}
+          >
+            ← Back
+          </button>
+          <div>
+            <h1 style={{ margin: 0, fontSize: "28px" }}>🎵 {currentPiece?.name}</h1>
+            <span style={{
+              fontSize: "14px",
+              padding: "4px 10px",
+              background: userRoleInPiece === "teacher" ? "#ff6b6b" : "#4caf50",
+              color: "white",
+              borderRadius: 5,
+              fontWeight: 700,
+              marginLeft: 5
+            }}>
+              {userRoleInPiece === "teacher" ? "🎓 Teacher" : "📚 Student"}
+            </span>
+            {userRoleInPiece === "teacher" && currentPiece?.access_code && (
+              <>
+                <span style={{
+                  fontSize: "14px",
+                  padding: "4px 10px",
+                  background: "#2196f3",
+                  color: "white",
+                  borderRadius: 5,
+                  fontWeight: 700,
+                  marginLeft: 10,
+                  cursor: "text",
+                  userSelect: "all",
+                  fontFamily: "monospace"
+                }}>
+                  Code: {currentPiece.access_code}
+                </span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    navigator.clipboard.writeText(currentPiece.access_code);
+                    alert("Access code copied!");
+                  }}
+                  style={{
+                    padding: "4px 10px",
+                    background: "#1976d2",
+                    color: "white",
+                    border: "none",
+                    borderRadius: 5,
+                    cursor: "pointer",
+                    fontSize: "12px",
+                    fontFamily: "Gaegu, sans-serif",
+                    marginLeft: 5,
+                    minHeight: "28px"
+                  }}
+                >
+                  📋
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 15, flexWrap: "wrap" }}>
           <span style={{ fontSize: 18 }}>
-            <strong>{profile?.name}</strong> ({profile?.role})
+            <strong>{profile?.name}</strong>
           </span>
           <button
             onClick={logout}
             style={{
-              padding: "8px 20px",
+              padding: "12px 24px",
               background: "#dc3545",
               color: "white",
               border: "none",
-              borderRadius: 5,
+              borderRadius: 8,
               cursor: "pointer",
               fontFamily: "Gaegu, sans-serif",
-              fontSize: 16,
+              fontSize: "18px",
+              minHeight: "48px",
+              touchAction: "manipulation"
             }}
           >
             Log Out
@@ -635,166 +755,34 @@ export default function App() {
         </div>
       </div>
 
-      {/* Piece Selection */}
-      <div style={{ 
-        marginBottom: 20,
-        padding: 15,
-        background: "white",
-        borderRadius: 8,
-        border: "2px solid var(--accent-dark)"
-      }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
-          <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
-            <strong style={{ fontSize: 18 }}>📚 Select Piece: </strong>
-            <select 
-              value={currentPiece?.id || ''} 
-              onChange={(e) => setCurrentPiece(pieces.find(p => p.id === e.target.value))}
-              style={{
-                padding: "8px 15px",
-                fontSize: 16,
-                fontFamily: "Gaegu, sans-serif",
-                borderRadius: 5,
-                border: "2px solid #4caf50",
-                cursor: "pointer"
-              }}
-            >
-              {pieces.length === 0 ? (
-                <option value="">No pieces available</option>
-              ) : (
-                pieces.map(p => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))
-              )}
-            </select>
-            <span style={{ color: "#666" }}>
-              (Annotations are separate for each piece)
-            </span>
-          </div>
-          {profile?.role === 'teacher' && (
-            <button
-              onClick={() => setShowPieceManager(!showPieceManager)}
-              style={{
-                padding: "8px 15px",
-                background: showPieceManager ? "#ff9800" : "#4caf50",
-                color: "white",
-                border: "none",
-                borderRadius: 5,
-                cursor: "pointer",
-                fontFamily: "Gaegu, sans-serif",
-                fontSize: 14,
-                fontWeight: "bold"
-              }}
-            >
-              {showPieceManager ? "✕ Close Manager" : "⚙️ Manage Pieces"}
-            </button>
-          )}
-        </div>
-        
-        {/* Piece Management UI (Teachers only) */}
-        {showPieceManager && profile?.role === 'teacher' && (
-          <div style={{ 
-            marginTop: 20, 
-            padding: 20, 
-            background: "#f0f8ff", 
-            borderRadius: 8,
-            border: "2px solid #4caf50"
-          }}>
-            <h3 style={{ marginTop: 0, color: "#4caf50" }}>📁 Piece Management</h3>
-            
-            {/* Upload New Piece */}
-            <div style={{ marginBottom: 20 }}>
-              <label style={{ display: "block", marginBottom: 10, fontWeight: "bold" }}>
-                Upload New Piece (PDF):
-              </label>
-              <input
-                type="file"
-                accept="application/pdf"
-                onChange={handlePieceUpload}
-                disabled={uploadingPiece}
-                style={{
-                  padding: "8px",
-                  border: "2px dashed #4caf50",
-                  borderRadius: 5,
-                  width: "100%",
-                  cursor: uploadingPiece ? 'wait' : 'pointer'
-                }}
-              />
-              {uploadingPiece && <p style={{ color: "#666", marginTop: 5 }}>⏳ Uploading...</p>}
-            </div>
-
-            {/* List of Pieces */}
-            <div>
-              <strong style={{ display: "block", marginBottom: 10 }}>All Pieces ({pieces.length}):</strong>
-              {pieces.length === 0 ? (
-                <p style={{ color: "#666", fontStyle: "italic" }}>No pieces uploaded yet. Upload a PDF to get started!</p>
-              ) : (
-                <div style={{ maxHeight: "300px", overflowY: "auto" }}>
-                  {pieces.map(piece => (
-                    <div
-                      key={piece.id}
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        padding: "10px",
-                        marginBottom: 8,
-                        background: currentPiece?.id === piece.id ? "#e8f5e9" : "white",
-                        border: currentPiece?.id === piece.id ? "2px solid #4caf50" : "1px solid #ddd",
-                        borderRadius: 5
-                      }}
-                    >
-                      <div>
-                        <strong>{piece.name}</strong>
-                        {currentPiece?.id === piece.id && <span style={{ marginLeft: 10, color: "#4caf50" }}>✓ Current</span>}
-                      </div>
-                      <button
-                        onClick={() => handleDeletePiece(piece.id)}
-                        style={{
-                          padding: "5px 15px",
-                          background: "#dc3545",
-                          color: "white",
-                          border: "none",
-                          borderRadius: 5,
-                          cursor: "pointer",
-                          fontSize: 12
-                        }}
-                      >
-                        🗑️ Delete
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-
       {/* PDF Controls */}
       {currentPiece?.pdf_url && (
         <div style={{
           marginBottom: 15,
-          padding: 15,
+          padding: "20px",
           background: "white",
           borderRadius: 8,
           border: "2px solid var(--accent-dark)",
           display: "flex",
-          gap: 15,
+          gap: "15px",
           flexWrap: "wrap",
-          alignItems: "center"
+          alignItems: "center",
+          justifyContent: "center"
         }}>
           <button
             onClick={() => setShowDetector(true)}
             style={{
-              padding: "10px 20px",
+              padding: "14px 28px",
               background: "#2196f3",
               color: "white",
               border: "none",
-              borderRadius: 5,
+              borderRadius: 8,
               cursor: "pointer",
-              fontSize: 15,
+              fontSize: "18px",
               fontFamily: "Gaegu, sans-serif",
-              fontWeight: 700
+              fontWeight: 700,
+              minHeight: "50px",
+              touchAction: "manipulation"
             }}
             title="Upload an annotated PDF to detect and import annotations"
           >
@@ -805,15 +793,17 @@ export default function App() {
             onClick={handleDownload}
             disabled={downloading}
             style={{
-              padding: "10px 20px",
+              padding: "14px 28px",
               background: downloading ? "#ccc" : "#4caf50",
               color: "white",
               border: "none",
-              borderRadius: 5,
+              borderRadius: 8,
               cursor: downloading ? "not-allowed" : "pointer",
-              fontSize: 15,
+              fontSize: "18px",
               fontFamily: "Gaegu, sans-serif",
-              fontWeight: 700
+              fontWeight: 700,
+              minHeight: "50px",
+              touchAction: "manipulation"
             }}
             title="Download PDF with current annotations"
           >
@@ -823,15 +813,17 @@ export default function App() {
           <button
             onClick={() => setIsDeleteMode(!isDeleteMode)}
             style={{
-              padding: "10px 20px",
+              padding: "14px 28px",
               background: isDeleteMode ? "#ff6b6b" : "#dc3545",
               color: "white",
               border: "none",
-              borderRadius: 5,
+              borderRadius: 8,
               cursor: "pointer",
-              fontSize: 15,
+              fontSize: "18px",
               fontFamily: "Gaegu, sans-serif",
-              fontWeight: 700
+              fontWeight: 700,
+              minHeight: "50px",
+              touchAction: "manipulation"
             }}
             title={isDeleteMode ? "Exit delete mode" : "Enter delete mode to remove annotations"}
           >
@@ -850,10 +842,10 @@ export default function App() {
           border: "2px solid #c92a2a",
           fontWeight: 700,
           textAlign: "center",
-          fontSize: 16
+          fontSize: "18px"
         }}>
           🗑️ DELETE MODE ACTIVE - Click any annotation to delete it
-          {profile?.role === 'student' && <span> (You can only delete your own annotations)</span>}
+          {userRoleInPiece === 'student' && <span> (You can only delete your own annotations)</span>}
         </div>
       )}
 
@@ -864,7 +856,7 @@ export default function App() {
           addAnnotation={addAnnotation}
           deleteAnnotation={deleteAnnotation}
           user={user}
-          profile={profile}
+          profile={{ ...profile, role: userRoleInPiece }}
           currentPiece={currentPiece}
           isDeleteMode={isDeleteMode}
         />
@@ -872,24 +864,28 @@ export default function App() {
       
       <div style={{ 
         display: "flex", 
-        gap: 15,
+        gap: "15px",
         flexWrap: "wrap",
         alignItems: "center",
-        marginTop: 20
+        marginTop: 20,
+        justifyContent: "center"
       }}>
         <button
           onClick={undo}
           disabled={historyIndex <= 0}
           style={{
-            padding: "10px 20px",
+            padding: "14px 24px",
             background: historyIndex > 0 ? "var(--accent-mint)" : "#ccc",
             color: "var(--accent-dark)",
-            fontSize: 16,
+            fontSize: "18px",
             cursor: historyIndex > 0 ? "pointer" : "not-allowed",
             opacity: historyIndex > 0 ? 1 : 0.6,
             border: "none",
-            borderRadius: 5,
+            borderRadius: 8,
             fontFamily: "Gaegu, sans-serif",
+            minHeight: "50px",
+            minWidth: "120px",
+            touchAction: "manipulation"
           }}
           title="Undo last change"
         >
@@ -899,15 +895,18 @@ export default function App() {
           onClick={redo}
           disabled={historyIndex >= history.length - 1}
           style={{
-            padding: "10px 20px",
+            padding: "14px 24px",
             background: historyIndex < history.length - 1 ? "var(--accent-mint)" : "#ccc",
             color: "var(--accent-dark)",
-            fontSize: 16,
+            fontSize: "18px",
             cursor: historyIndex < history.length - 1 ? "pointer" : "not-allowed",
             opacity: historyIndex < history.length - 1 ? 1 : 0.6,
             border: "none",
-            borderRadius: 5,
+            borderRadius: 8,
             fontFamily: "Gaegu, sans-serif",
+            minHeight: "50px",
+            minWidth: "120px",
+            touchAction: "manipulation"
           }}
           title="Redo last undone change"
         >
@@ -916,15 +915,17 @@ export default function App() {
         <button
           onClick={() => setShowHistory(!showHistory)}
           style={{
-            padding: "12px 25px",
+            padding: "14px 28px",
             background: showHistory ? "#ff9800" : "#6c757d",
             color: "white",
             border: "none",
-            borderRadius: 5,
+            borderRadius: 8,
             cursor: "pointer",
             fontWeight: showHistory ? "bold" : "normal",
-            fontSize: 16,
+            fontSize: "18px",
             fontFamily: "Gaegu, sans-serif",
+            minHeight: "50px",
+            touchAction: "manipulation"
           }}
         >
           {showHistory ? "✕ Hide History" : "📜 View History"}
@@ -935,7 +936,7 @@ export default function App() {
         <VersionHistory 
           currentPieceId={currentPiece?.id} 
           onRevert={revertToVersion}
-          userRole={profile?.role}
+          userRole={userRoleInPiece}
         />
       )}
       
@@ -962,7 +963,7 @@ export default function App() {
             setConflicts([]);
             setPendingAnnotations([]);
           }}
-          currentUserProfile={profile}
+          currentUserProfile={{ ...profile, role: userRoleInPiece }}
         />
       )}
     </div>
