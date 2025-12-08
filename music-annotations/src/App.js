@@ -531,6 +531,67 @@ export default function App() {
     }
   }
 
+  async function handleUploadPDFToPiece(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    if (!file.name.toLowerCase().endsWith('.pdf')) {
+      alert("Please upload a PDF file.");
+      return;
+    }
+
+    if (!currentPiece) {
+      alert("No piece selected.");
+      return;
+    }
+
+    setUploadingPiece(true);
+    try {
+      // Upload PDF to storage
+      const fileName = `${Date.now()}-${file.name.replace(/\s+/g, '-')}`;
+      const { error: uploadError } = await supabase.storage
+        .from("stickers")
+        .upload(fileName, file, { contentType: 'application/pdf' });
+
+      if (uploadError) {
+        throw uploadError;
+      }
+
+      // Get public URL
+      const { data: urlData } = supabase.storage
+        .from("stickers")
+        .getPublicUrl(fileName);
+
+      // Update piece record with PDF URL
+      const { error: dbError } = await supabase
+        .from("pieces")
+        .update({
+          pdf_url: urlData.publicUrl,
+          base_pdf_url: urlData.publicUrl
+        })
+        .eq("id", currentPiece.id);
+
+      if (dbError) {
+        throw dbError;
+      }
+
+      // Update local state
+      setCurrentPiece({
+        ...currentPiece,
+        pdf_url: urlData.publicUrl,
+        base_pdf_url: urlData.publicUrl
+      });
+
+      alert("PDF uploaded successfully!");
+      e.target.value = ''; // Reset file input
+    } catch (error) {
+      console.error("Error uploading PDF:", error);
+      alert("Failed to upload PDF: " + error.message);
+    } finally {
+      setUploadingPiece(false);
+    }
+  }
+
   async function handleDeletePiece(pieceId) {
     if (!window.confirm("Are you sure you want to delete this piece? This will also delete all annotations for this piece.")) {
       return;
@@ -753,6 +814,59 @@ export default function App() {
           </button>
         </div>
       </div>
+
+      {/* No PDF Yet - Upload Option */}
+      {currentPiece && !currentPiece.pdf_url && (
+        <div style={{
+          marginBottom: 20,
+          padding: "40px",
+          background: "white",
+          borderRadius: 8,
+          border: "3px dashed var(--accent-dark)",
+          textAlign: "center"
+        }}>
+          <h2 style={{ marginTop: 0, color: "var(--accent-dark)" }}>📄 No PDF Yet</h2>
+          <p style={{ fontSize: "18px", color: "#666", marginBottom: 25 }}>
+            {userRoleInPiece === "teacher" 
+              ? "Upload a PDF to start annotating this piece."
+              : "The teacher hasn't uploaded a PDF yet. Check back later!"}
+          </p>
+          
+          {userRoleInPiece === "teacher" && (
+            <div>
+              <input
+                type="file"
+                accept="application/pdf"
+                onChange={handleUploadPDFToPiece}
+                disabled={uploadingPiece}
+                id="pdf-upload"
+                style={{ display: "none" }}
+              />
+              <label
+                htmlFor="pdf-upload"
+                style={{
+                  display: "inline-block",
+                  padding: "16px 32px",
+                  background: uploadingPiece ? "#ccc" : "#4caf50",
+                  color: "white",
+                  borderRadius: 8,
+                  cursor: uploadingPiece ? "not-allowed" : "pointer",
+                  fontSize: "20px",
+                  fontWeight: 700,
+                  fontFamily: "Gaegu, sans-serif",
+                  minHeight: "56px",
+                  touchAction: "manipulation"
+                }}
+              >
+                {uploadingPiece ? "⏳ Uploading..." : "📤 Upload PDF"}
+              </label>
+              <p style={{ fontSize: "14px", color: "#999", marginTop: 10 }}>
+                Accepted format: PDF files only
+              </p>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* PDF Controls */}
       {currentPiece?.pdf_url && (
