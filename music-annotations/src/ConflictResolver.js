@@ -135,18 +135,22 @@ export default function ConflictResolver({ conflicts, onResolve, onClose, curren
                   )}
                 </div>
               </div>
-              <div style={{ marginTop: 20, display: "flex", gap: 12, flexWrap: "wrap" }}>
+              <div style={{ marginTop: 20, display: "flex", gap: "15px", flexWrap: "wrap" }}>
                 <button
                   onClick={() => onResolve(i, "keep-new")}
                   disabled={!canUserOverride}
                   style={{
                     flex: 1,
-                    minWidth: 140,
-                    padding: "10px 15px",
+                    minWidth: "140px",
+                    padding: "14px 20px",
                     background: canUserOverride ? "var(--secondary)" : "#ccc",
                     color: canUserOverride ? "var(--accent-dark)" : "#666",
                     cursor: canUserOverride ? "pointer" : "not-allowed",
                     opacity: canUserOverride ? 1 : 0.6,
+                    fontSize: "18px",
+                    minHeight: "50px",
+                    borderRadius: "8px",
+                    touchAction: "manipulation"
                   }}
                 >
                   Keep Mine
@@ -155,10 +159,14 @@ export default function ConflictResolver({ conflicts, onResolve, onClose, curren
                   onClick={() => onResolve(i, "keep-existing")}
                   style={{
                     flex: 1,
-                    minWidth: 140,
-                    padding: "10px 15px",
+                    minWidth: "140px",
+                    padding: "14px 20px",
                     background: "var(--accent-mint)",
-                    color: "var(--accent-dark)"
+                    color: "var(--accent-dark)",
+                    fontSize: "18px",
+                    minHeight: "50px",
+                    borderRadius: "8px",
+                    touchAction: "manipulation"
                   }}
                 >
                   Keep Existing
@@ -168,12 +176,16 @@ export default function ConflictResolver({ conflicts, onResolve, onClose, curren
                   disabled={!canUserOverride}
                   style={{
                     flex: 1,
-                    minWidth: 140,
-                    padding: "10px 15px",
+                    minWidth: "140px",
+                    padding: "14px 20px",
                     background: canUserOverride ? "var(--accent-dark)" : "#ccc",
                     color: canUserOverride ? "white" : "#666",
                     cursor: canUserOverride ? "pointer" : "not-allowed",
                     opacity: canUserOverride ? 1 : 0.6,
+                    fontSize: "18px",
+                    minHeight: "50px",
+                    borderRadius: "8px",
+                    touchAction: "manipulation"
                   }}
                 >
                   Keep Both
@@ -186,11 +198,14 @@ export default function ConflictResolver({ conflicts, onResolve, onClose, curren
           onClick={onClose}
           style={{
             marginTop: 25,
-            padding: "12px 20px",
+            padding: "16px 24px",
             background: "var(--accent-pink)",
             color: "var(--accent-dark)",
             width: "100%",
-            fontSize: 16
+            fontSize: "20px",
+            minHeight: "56px",
+            borderRadius: "8px",
+            touchAction: "manipulation"
           }}
         >
           ✕ Cancel Save
